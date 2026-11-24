@@ -61,6 +61,7 @@ function Item({ item, onError }: { item: QueueItem; onError: (m: string) => void
         </div>
       )}
 
+      {item.cookieNote && <div className="small muted">{item.cookieNote}</div>}
       {item.verify && (
         <div className="small muted mono">
           {[item.verify.videoCodec, item.verify.audioCodec].filter(Boolean).join(' + ')}

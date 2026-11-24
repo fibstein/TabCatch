@@ -10,6 +10,7 @@ Chrome, Edge ve Opera'da açık olan tablardaki videoları [yt-dlp](https://gith
 ```
 
 - **Neden eklenti var?** Tarayıcılar açık tabların listesini dışarıdaki programlara vermiyor. Chrome 136'dan beri `--remote-debugging-port` normal profilde de çalışmıyor. Eklentinin tek görevi tab listesini uygulamaya göndermek.
+- **Giriş gerektiren videolar:** Bir video indirilmeden hemen önce uygulama, videonun açık olduğu tarayıcıdaki eklentiden o sayfaya gönderilecek cookie'leri ister. Bunlar `cookies.txt` formatında geçici bir dosyaya yazılır, `--cookies` ile yt-dlp'ye verilir ve yt-dlp kapanınca silinir. Tarayıcının bütün cookie'leri alınmaz; sadece o URL'ye gidecek olanlar ve o host'un alt alan adlarına ait olanlar alınır. Sekme gizli pencerede ya da farklı bir cookie store'daysa o store kullanılır.
 - **Güvenlik:** Uygulama yalnızca `127.0.0.1`'i dinliyor ve sadece `chrome-extension://gmnikljdephmcpmopgefkeggmombghhj` origin'inden gelen bağlantıları kabul ediyor. Web sayfaları bu origin'i taklit edemez. Eklenti ID'si `extension/manifest.json` içindeki `key` alanıyla sabitlendiği için Chrome, Edge ve Opera'da aynı.
 
 ## Gerekli paketler: otomatik
@@ -72,7 +73,7 @@ npm run dist
 
 1. `chrome://extensions`, `edge://extensions` veya `opera://extensions` sayfasını aç.
 2. Geliştirici modunu aç.
-3. **Paketlenmemiş öğe yükle** butonuna bas ve `extension/dist` klasörünü seç. Kurulu uygulamada bu klasör uygulamadaki "Eklenti klasörünü aç" butonuyla açılır.
+3. **Paketlenmemiş öğe yükle** butonuna bas ve `extension/dist` klasörünü seç. Eklentinin eski bir sürümü yüklüyse eklentiler sayfasında **Yeniden yükle** butonuna bas; 0.2.0 sürümü cookie izni ekliyor. Kurulu uygulamada bu klasör uygulamadaki "Eklenti klasörünü aç" butonuyla açılır.
 
 Tarayıcılar mağaza dışındaki eklentilerin otomatik kurulmasına izin vermiyor. Bu adım ancak eklenti Chrome Web Store / Edge Add-ons'a yayınlanırsa tek tıklamaya iner. Manifest'teki `key`'in özel anahtarı repoda yok; mağazaya yüklerken ya da `.crx` paketlerken yeni bir anahtar üretilmesi gerekecek.
 
@@ -94,6 +95,8 @@ tests/                      vitest
 ## Kapsam dışı / bilinen sınırlar
 
 - DRM'li içerik (Netflix vb.) indirilemez.
-- Giriş gerektiren videolar henüz desteklenmiyor. Planlanan çözüm, cookie'leri eklenti üzerinden `cookies.txt` olarak aktarmak; `--cookies-from-browser` Chrome 127+'da Windows'ta güvenilir çalışmıyor.
+- YouTube için cookie gönderimi varsayılan olarak kapalı (Ayarlar → "YouTube için de gönder"). Herkese açık videolar cookie istemiyor ve yt-dlp, giriş yapılmış hesapla yoğun kullanımda hesabın kısıtlanabileceği konusunda uyarıyor.
+- `--cookies-from-browser` kullanılmıyor: Chrome 127+'nın app-bound encryption'ı yüzünden Windows'ta Chrome/Edge cookie'leri bu yolla güvenilir şekilde okunamıyor. Bunun yerine cookie'ler eklentiden alınıyor.
+- Eklenti, cookie okuyabilmek için "tüm sitelerdeki verileri okuma" izni istiyor. Bu izin geri alınırsa uygulama üst barda "cookie izni yok" gösterir ve cookie göndermeden indirmeyi dener.
 - Installer imzasız olduğu için Windows SmartScreen uyarı verir.
 - YouTube'dan indirme YouTube'un kullanım koşullarına aykırıdır; sorumluluk kullanıcıya aittir.

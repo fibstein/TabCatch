@@ -10,6 +10,11 @@ export interface QueueItem {
   url: string;
   title: string;
   browser?: string;
+  /** Bridge connection and tab the URL came from; used to fetch that browser's cookies. */
+  clientId?: string;
+  tabId?: number;
+  /** What happened with cookies on the last run, shown in the UI (never the cookies themselves). */
+  cookieNote?: string;
   status: ItemStatus;
   progress: ProgressInfo | null;
   result?: ResultInfo;
@@ -35,7 +40,10 @@ export type Runner = (args: string[]) => RunHandle;
 
 export interface DownloaderDeps {
   runner: Runner;
-  buildArgs(item: QueueItem): string[];
+  /** May be async (e.g. fetches cookies from the browser before the download starts). */
+  buildArgs(item: QueueItem): string[] | Promise<string[]>;
+  /** Called once yt-dlp has exited (or never started); used to delete the temporary cookie file. */
+  afterRun?(item: QueueItem): Promise<void>;
   verify(item: QueueItem, result: ResultInfo): Promise<VerifyResult>;
   deleteFile(path: string): Promise<void>;
   /** Automatic re-downloads after a failed integrity check. */
@@ -47,7 +55,7 @@ const MAX_LOG_LINES = 400;
 
 export class DownloadQueue extends EventEmitter {
   private items: QueueItem[] = [];
-  private current: { item: QueueItem; handle: RunHandle; canceled: boolean } | null = null;
+  private current: { item: QueueItem; handle: RunHandle | null; canceled: boolean } | null = null;
   private paused = false;
 
   constructor(private readonly deps: DownloaderDeps) {
@@ -72,7 +80,7 @@ export class DownloadQueue extends EventEmitter {
     if (!p) this.pump();
   }
 
-  add(entries: { url: string; title: string; browser?: string }[]): QueueItem[] {
+  add(entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number }[]): QueueItem[] {
     const active = new Set(
       this.items.filter((i) => i.status === 'queued' || i.status === 'downloading').map((i) => i.url),
     );
@@ -85,6 +93,8 @@ export class DownloadQueue extends EventEmitter {
         url: e.url,
         title: e.title,
         browser: e.browser,
+        clientId: e.clientId,
+        tabId: e.tabId,
         status: 'queued',
         progress: null,
         attempts: 0,
@@ -104,7 +114,7 @@ export class DownloadQueue extends EventEmitter {
   cancel(id: string) {
     if (this.current?.item.id === id) {
       this.current.canceled = true;
-      this.current.handle.kill();
+      this.current.handle?.kill();
       return;
     }
     const item = this.get(id);
@@ -160,9 +170,28 @@ export class DownloadQueue extends EventEmitter {
     item.result = undefined;
     item.verify = undefined;
     item.log.push(`--- deneme ${item.attempts}${item.fresh ? ' (sıfırdan)' : ''} ---`);
-    const handle = this.deps.runner(this.deps.buildArgs(item));
-    this.current = { item, handle, canceled: false };
+    const current: { item: QueueItem; handle: RunHandle | null; canceled: boolean } = { item, handle: null, canceled: false };
+    this.current = current;
     this.changed();
+
+    let args: string[] | null = null;
+    try {
+      args = await this.deps.buildArgs(item);
+    } catch (err) {
+      item.log.push(`Hazırlık başarısız: ${(err as Error).message}`);
+    }
+    if (!args || current.canceled) {
+      await this.deps.afterRun?.(item).catch(() => undefined);
+      this.current = null;
+      item.status = current.canceled ? 'canceled' : 'error';
+      if (!current.canceled) item.error = item.log[item.log.length - 1];
+      this.changed();
+      this.deps.onFinished?.(item);
+      this.pump();
+      return;
+    }
+    const handle = this.deps.runner(args);
+    current.handle = handle;
 
     let lastEmit = 0;
     handle.onLine((line) => {
@@ -189,7 +218,8 @@ export class DownloadQueue extends EventEmitter {
       code = -1;
       item.log.push(String(err));
     }
-    const canceled = this.current?.canceled ?? false;
+    await this.deps.afterRun?.(item).catch(() => undefined);
+    const canceled = current.canceled;
     this.current = null;
 
     if (canceled) {

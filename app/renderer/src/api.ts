@@ -18,7 +18,7 @@ export interface TabCatchApi {
   tabs: { refresh(): Promise<BrowserTabs[]> };
   queue: {
     list(): Promise<QueueItem[]>;
-    add(entries: { url: string; title: string; browser?: string }[]): Promise<QueueItem[]>;
+    add(entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number }[]): Promise<QueueItem[]>;
     cancel(id: string): Promise<void>;
     retry(id: string): Promise<void>;
     remove(id: string): Promise<void>;

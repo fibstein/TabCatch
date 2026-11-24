@@ -51,12 +51,36 @@ describe('Bridge', () => {
     ext.close();
   });
 
+  it('fetches cookies from one specific browser', async () => {
+    bridge = new Bridge(PORT, () => [ID]);
+    await bridge.start();
+    const ext = await connect(`chrome-extension://${ID}`);
+    const asked: unknown[] = [];
+    ext.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === 'requestCookies') {
+        asked.push({ url: msg.url, tabId: msg.tabId });
+        ext.send(JSON.stringify({ type: 'cookies', requestId: msg.requestId, cookies: [{ domain: '.v.com', hostOnly: false, path: '/', secure: true, httpOnly: true, name: 's', value: '1' }] }));
+      }
+    });
+    ext.send(JSON.stringify({ type: 'hello', browser: 'edge', extensionVersion: '0.2.0', canReadCookies: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    const [client] = bridge.clients();
+    expect(client.canReadCookies).toBe(true);
+    const r = await bridge.requestCookies(client.id, 'https://v.com/watch', 5, 1000);
+    expect(asked).toEqual([{ url: 'https://v.com/watch', tabId: 5 }]);
+    expect(r?.cookies).toMatchObject([{ name: 's', httpOnly: true }]);
+    expect(await bridge.requestCookies('unknown', 'https://v.com')).toBeNull();
+    ext.close();
+  });
+
   it('skips browsers that do not answer', async () => {
     bridge = new Bridge(PORT, () => [ID]);
     await bridge.start();
     const silent = await connect(`chrome-extension://${ID}`);
     await new Promise((r) => setTimeout(r, 20));
     expect(await bridge.requestTabs(100)).toEqual([]);
+    expect(await bridge.requestCookies(bridge.clients()[0].id, 'https://v.com', undefined, 100)).toBeNull();
     silent.close();
   });
 });

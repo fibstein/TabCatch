@@ -12,6 +12,7 @@ import { spawnRunner } from './runner';
 import { defaultSettings, SettingsStore, type Settings } from './settings';
 import { deepCheck, repairFile, verifyFile, type RepairMode, type VerifyExpectations } from './verify';
 import { buildYtDlpArgs } from './ytdlp';
+import { cookieDecision, deleteCookieFile, pickCookieClient, writeCookieFile } from './cookies';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -24,6 +25,8 @@ const binDir =
     ? join(process.env.LOCALAPPDATA, 'TabCatch', 'bin')
     : join(userData, 'bin');
 const logDir = join(userData, 'logs');
+// Cookie files live only while yt-dlp runs; anything left here is from a crash and is wiped at startup.
+const cookieDir = join(userData, 'cookies-tmp');
 const defs = getDepDefs();
 const bin = (base: string) => join(binDir, exe(base));
 const fetchImpl = (url: string) => net.fetch(url); // follows the system proxy settings
@@ -45,8 +48,9 @@ function expectations(item: QueueItem, duration: number | null): VerifyExpectati
 
 const queue = new DownloadQueue({
   runner: (args) => spawnRunner(bin('yt-dlp'), args),
-  buildArgs: (item) => {
+  buildArgs: async (item) => {
     const s = settings.get();
+    const cookiesFile = await prepareCookies(item);
     return buildYtDlpArgs({
       url: item.url,
       outputDir: s.outputDir,
@@ -54,8 +58,10 @@ const queue = new DownloadQueue({
       ffmpegDir: binDir,
       denoPath: bin('deno'),
       fresh: item.fresh,
+      cookiesFile,
     });
   },
+  afterRun: (item) => deleteCookieFile(cookieDir, item.id),
   verify: async (item, result) => {
     const v = await verifyFile(bin('ffprobe'), result.filepath, expectations(item, result.duration));
     if (v.ok && settings.get().deepCheck) {
@@ -76,6 +82,41 @@ const queue = new DownloadQueue({
 queue.on('update', (items) => send('queue:update', items));
 queue.on('idle', () => void applyPendingUpdates());
 bridge.on('clients', (clients) => send('bridge:clients', clients));
+
+/** Fetches the cookies for this one URL from the browser the tab is open in; never fails the download. */
+async function prepareCookies(item: QueueItem): Promise<string | undefined> {
+  const note = (text: string | undefined) => {
+    item.cookieNote = text;
+    if (text) item.log.push(`[cookie] ${text}`);
+  };
+  const decision = cookieDecision(item.url, settings.get());
+  if (!decision.send) {
+    note(decision.note);
+    return undefined;
+  }
+  const client = pickCookieClient(bridge.clients(), item);
+  if (!client) {
+    note('Cookie alınamadı: tarayıcı eklentisi bağlı değil, cookie olmadan deneniyor');
+    return undefined;
+  }
+  if (!client.canReadCookies) {
+    note('Eklenti cookie okuyamıyor (eklentiyi yeniden yükle veya site erişimine izin ver), cookie olmadan deneniyor');
+    return undefined;
+  }
+  // Tab ids are per browser connection; only pass it when talking to the original one.
+  const res = await bridge.requestCookies(client.id, item.url, client.id === item.clientId ? item.tabId : undefined);
+  if (!res || res.error) {
+    note(`Cookie alınamadı${res?.error ? `: ${res.error}` : ' (tarayıcı yanıt vermedi)'}, cookie olmadan deneniyor`);
+    return undefined;
+  }
+  if (!res.cookies.length) {
+    note(undefined);
+    return undefined;
+  }
+  const file = await writeCookieFile(cookieDir, item.id, res.cookies);
+  note(`${res.cookies.length} cookie gönderildi (${client.browser})`);
+  return file;
+}
 
 async function refreshDeps(): Promise<DepStatus[]> {
   const prev = new Map(depStatus.map((d) => [d.id, d.updateAvailable]));
@@ -156,7 +197,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('queue:list', () => queue.list());
-  ipcMain.handle('queue:add', (_e, entries: { url: string; title: string; browser?: string }[]) => {
+  ipcMain.handle('queue:add', (_e, entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number }[]) => {
     if (!depsReady()) throw new Error('Önce gerekli paketler kurulmalı');
     return queue.add(entries.filter((e) => isCandidateUrl(e.url)));
   });
@@ -232,6 +273,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    await rm(cookieDir, { recursive: true, force: true });
     registerIpc();
     createWindow();
     try {
@@ -246,6 +288,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', async () => {
     for (const item of queue.list()) if (item.status === 'downloading') queue.cancel(item.id);
     await bridge.stop();
+    await rm(cookieDir, { recursive: true, force: true });
     app.quit();
   });
 }

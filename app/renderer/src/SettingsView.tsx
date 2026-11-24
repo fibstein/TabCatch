@@ -73,6 +73,36 @@ export function SettingsView({
       </section>
 
       <section className="card">
+        <h2>Giriş gerektiren videolar</h2>
+        <label className="check">
+          <input type="checkbox" checked={settings.sendCookies} onChange={(e) => set({ sendCookies: e.target.checked })} />
+          <span>
+            Tarayıcıdaki oturumu kullan (cookie gönder)
+            <div className="muted small">
+              Her video indirilmeden hemen önce, videonun açık olduğu tarayıcıdan yalnızca o sayfaya ait cookie'ler alınır, geçici bir
+              dosyayla yt-dlp'ye verilir ve indirme bitince silinir. Cookie'ler yalnızca o videonun sitesine gönderilir, loglara
+              yazılmaz.
+            </div>
+          </span>
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            disabled={!settings.sendCookies}
+            checked={settings.sendYouTubeCookies}
+            onChange={(e) => set({ sendYouTubeCookies: e.target.checked })}
+          />
+          <span>
+            YouTube için de gönder
+            <div className="muted small">
+              Sadece yaş sınırlı, üyelere özel veya Premium videolar için gerekir. yt-dlp, giriş yapılmış hesapla yoğun indirmenin
+              hesabın geçici veya kalıcı olarak kısıtlanmasına yol açabileceği konusunda uyarıyor. Mümkünse ayrı bir hesap kullan.
+            </div>
+          </span>
+        </label>
+      </section>
+
+      <section className="card">
         <h2>Paketler</h2>
         <DepProgressList deps={deps} />
         <label className="check">

@@ -40,7 +40,10 @@ export function TabsView({ onQueued, onError }: { onQueued: () => void; onError:
   const enqueue = async () => {
     // Keep tab order (window by window, left to right): that is the download order.
     const entries = groups.flatMap((g) =>
-      g.tabs.filter((t) => selected.has(key(g, t.tabId))).map((t) => ({ url: t.url, title: t.title, browser: g.browser })),
+      g.tabs
+        .filter((t) => selected.has(key(g, t.tabId)))
+        // clientId + tabId let the app fetch this tab's cookies from the right browser later.
+        .map((t) => ({ url: t.url, title: t.title, browser: g.browser, clientId: g.clientId, tabId: t.tabId })),
     );
     try {
       await api().queue.add(entries);

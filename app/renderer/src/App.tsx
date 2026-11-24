@@ -54,7 +54,7 @@ export function App() {
         </nav>
         <span className="muted small">
           {clients.length
-            ? `Bağlı: ${clients.map((c) => c.browser).join(', ')}`
+            ? `Bağlı: ${clients.map((c) => (c.canReadCookies ? c.browser : `${c.browser} (cookie izni yok)`)).join(', ')}`
             : 'Tarayıcı eklentisi bağlı değil'}
         </span>
       </header>

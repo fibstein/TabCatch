@@ -3,6 +3,7 @@ import {
   BRIDGE_PORT,
   type AppToExt,
   type BrowserName,
+  type CookieInfo,
   type ExtToApp,
   type TabInfo,
 } from '../../shared/protocol';
@@ -46,9 +47,57 @@ async function collectTabs(): Promise<TabInfo[]> {
     }));
 }
 
+/** Users can withdraw site access in Edge/Opera; without it cookies.getAll returns nothing. */
+function canReadCookies(): Promise<boolean> {
+  return chrome.permissions.contains({ permissions: ['cookies'], origins: ['<all_urls>'] });
+}
+
+async function storeIdForTab(tabId: number | undefined): Promise<string | undefined> {
+  if (tabId === undefined) return undefined;
+  const stores = await chrome.cookies.getAllCookieStores();
+  return stores.find((s) => s.tabIds.includes(tabId))?.id;
+}
+
+/**
+ * Only cookies the browser itself would send to this page (plus cookies of its exact host's
+ * subdomains), never the whole cookie jar.
+ */
+async function collectCookies(url: string, tabId?: number): Promise<CookieInfo[]> {
+  const storeId = await storeIdForTab(tabId);
+  const host = new URL(url).hostname.replace(/^www\./, '');
+  const [forUrl, forHost] = await Promise.all([
+    chrome.cookies.getAll({ url, storeId }),
+    chrome.cookies.getAll({ domain: host, storeId }),
+  ]);
+  const seen = new Set<string>();
+  const out: CookieInfo[] = [];
+  for (const c of [...forUrl, ...forHost]) {
+    const key = `${c.domain}|${c.path}|${c.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      domain: c.domain,
+      hostOnly: c.hostOnly,
+      path: c.path,
+      secure: c.secure,
+      httpOnly: c.httpOnly,
+      expirationDate: c.session ? undefined : c.expirationDate,
+      name: c.name,
+      value: c.value,
+    });
+  }
+  return out;
+}
+
 async function handle(msg: AppToExt) {
   if (msg.type === 'requestTabs') {
     send({ type: 'tabs', requestId: msg.requestId, browser, tabs: await collectTabs() });
+  } else if (msg.type === 'requestCookies') {
+    try {
+      send({ type: 'cookies', requestId: msg.requestId, cookies: await collectCookies(msg.url, msg.tabId) });
+    } catch (err) {
+      send({ type: 'cookies', requestId: msg.requestId, cookies: [], error: String(err) });
+    }
   }
 }
 
@@ -56,8 +105,8 @@ function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   const ws = new WebSocket(URL_);
   socket = ws;
-  ws.onopen = () => {
-    send({ type: 'hello', browser, extensionVersion: chrome.runtime.getManifest().version });
+  ws.onopen = async () => {
+    send({ type: 'hello', browser, extensionVersion: chrome.runtime.getManifest().version, canReadCookies: await canReadCookies() });
     clearInterval(pingTimer);
     pingTimer = setInterval(() => send({ type: 'ping' }), PING_MS);
   };

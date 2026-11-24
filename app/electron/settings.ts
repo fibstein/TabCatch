@@ -10,6 +10,10 @@ export interface Settings {
   /** Full decode after each download; slow, off by default. */
   deepCheck: boolean;
   autoUpdateYtDlp: boolean;
+  /** Pass the browser's cookies for the video page to yt-dlp (needed for logged-in content). */
+  sendCookies: boolean;
+  /** Separate opt-in for YouTube: not needed for public videos, and risky for the account. */
+  sendYouTubeCookies: boolean;
   lastUpdateCheck: number;
   /** Extra IDs for development builds loaded without the fixed manifest key. */
   extraExtensionIds: string[];
@@ -21,6 +25,8 @@ export function defaultSettings(downloadsDir: string): Settings {
     preset: 'compat',
     deepCheck: false,
     autoUpdateYtDlp: true,
+    sendCookies: true,
+    sendYouTubeCookies: false,
     lastUpdateCheck: 0,
     extraExtensionIds: [],
   };

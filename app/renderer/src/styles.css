@@ -1,0 +1,89 @@
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1c1f24;
+  --muted: #687080;
+  --border: #dde1e7;
+  --accent: #2f6fde;
+  --accent-text: #ffffff;
+  --ok: #1d8a4a;
+  --warn: #b26a00;
+  --err: #c23434;
+  --sel: #e8f0fd;
+  color-scheme: light dark;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181c;
+    --card: #1f2228;
+    --text: #e6e8eb;
+    --muted: #9aa2ae;
+    --border: #333843;
+    --accent: #5b8ff0;
+    --ok: #4cc27d;
+    --warn: #e0a040;
+    --err: #ef6b6b;
+    --sel: #263450;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+button {
+  font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card); color: var(--text); cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+code, .mono { font-family: Consolas, 'Cascadia Mono', monospace; font-size: 12px; }
+.app { display: flex; flex-direction: column; height: 100vh; }
+header {
+  display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+  background: var(--card); border-bottom: 1px solid var(--border);
+}
+.brand { font-size: 16px; }
+nav { display: flex; gap: 4px; flex: 1; }
+nav button { border: none; background: transparent; }
+nav button.active { background: var(--sel); color: var(--accent); }
+main { flex: 1; overflow: auto; padding: 16px; }
+.center { display: grid; place-items: center; height: 100vh; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.error-text { color: var(--err); }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.card h2, .card h3 { margin-top: 0; }
+.banner { padding: 8px 16px; cursor: pointer; white-space: pre-wrap; }
+.banner.error { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.spacer, .grow { flex: 1; min-width: 0; }
+.row { display: flex; gap: 8px; align-items: center; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check, .radio { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; cursor: pointer; }
+.field { display: block; margin-bottom: 14px; }
+.field > span { display: block; font-weight: 600; margin-bottom: 6px; }
+.steps li { margin-bottom: 6px; }
+table.deps { width: 100%; border-collapse: collapse; }
+table.deps td { padding: 8px 6px; border-top: 1px solid var(--border); vertical-align: top; }
+.state.ok { color: var(--ok); }
+.state.missing { color: var(--warn); }
+.state.broken { color: var(--err); }
+.progress-cell { width: 40%; }
+progress { width: 100%; height: 8px; }
+ul.tabs, ul.queue { list-style: none; margin: 0; padding: 0; }
+ul.tabs li { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+ul.tabs li:hover { background: var(--bg); }
+ul.tabs li.selected { background: var(--sel); }
+ul.tabs img, .favicon { width: 16px; height: 16px; flex-shrink: 0; }
+.tab-text { min-width: 0; flex: 1; }
+.queue-item { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+.queue-item .row + .row { margin-top: 8px; }
+.queue-item .row progress { flex: 1; }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--bg); white-space: nowrap; }
+.badge.done { color: var(--ok); }
+.badge.downloading, .badge.verifying { color: var(--accent); }
+.badge.error, .badge.verify_failed { color: var(--err); }
+.badge.canceled { color: var(--muted); }
+pre.log { max-height: 260px; overflow: auto; background: var(--bg); padding: 8px; border-radius: 6px; font-size: 11px; white-space: pre-wrap; }

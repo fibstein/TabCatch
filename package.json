@@ -1,0 +1,25 @@
+{
+  "name": "tabcatch",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "app",
+    "extension"
+  ],
+  "scripts": {
+    "build": "npm run build -w extension && npm run build -w app",
+    "start": "npm run build -w extension && npm run start -w app",
+    "dist": "npm run build -w extension && npm run dist -w app",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.7",
+    "@types/node": "^22.20.5",
+    "@types/ws": "^8.18.1",
+    "@types/yauzl": "^3.4.0",
+    "esbuild": "^0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

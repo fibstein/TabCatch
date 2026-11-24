@@ -1,0 +1,54 @@
+{
+  "name": "tabcatch-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Downloads videos from open browser tabs with yt-dlp",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build:main": "node build-main.mjs",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "tree-kill": "^1.2.2",
+    "ws": "^8.23.0",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "vite": "^8.3.8"
+  },
+  "build": {
+    "appId": "com.tabcatch.app",
+    "productName": "TabCatch",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../extension/dist",
+        "to": "extension"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

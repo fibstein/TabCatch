@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "TabCatch Bridge",
+  "version": "0.1.0",
+  "description": "Sends the list of open tabs to the TabCatch desktop app running on this computer.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqSih/8zCanMDOP9xOduDKJYJ0Ey0Rs3vsOAeanHu26e99SKgfv3KhSo0l+EoeGr1BsCmNIbyOKFBuh+t9+lF3foCbaxJg9HZhAB4IpQ5KtHQdVkjE2AiHhNmOg3vgx5uGVeRvjfrwzx0DJ04xtk8NBB6dU/F04NQetlf8aeEBBMLy8rZYNu0uT0FGllnRWi9ptwakM4qdzltqfoozOrV9EwN0Pohg8vpKaYHsIp02VD+MxisEyIabJFvMxa4qqNC2hINdtSOntc03TADv7Hhsgy/SgvCz8EWwQXLk7D+w4E1GnDcEulmgUROhXmkEE1a1jSSs4HdrkzmvSGkci5HNwIDAQAB",
+  "permissions": ["tabs", "alarms"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "minimum_chrome_version": "120"
+}

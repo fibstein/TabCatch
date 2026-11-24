@@ -23,7 +23,8 @@ const bad: VerifyResult = { ok: false, problems: ['Süre uyuşmuyor'], actualDur
 
 function setup(
   verify: (item: QueueItem) => VerifyResult = () => ok,
-  buildArgs: (item: QueueItem) => string[] | Promise<string[]> = (item) => [item.url, item.fresh ? 'fresh' : 'resume'],
+  buildArgs: (item: QueueItem) => string[] | Promise<string[]> = (item) => [item.url, item.fresh ? 'fresh' : 'resume', String(item.outputSuffix ?? 1)],
+  extra: Partial<ConstructorParameters<typeof DownloadQueue>[0]> = {},
 ) {
   const { runs, runner } = fakeRunner();
   const deleteFile = vi.fn(async () => {});
@@ -36,6 +37,7 @@ function setup(
     verify: async (item) => verify(item),
     deleteFile,
     onFinished: (i) => finished.push({ ...i }),
+    ...extra,
   });
   const succeed = async (i: number, file = `/out/${i}.mp4`) => {
     runs[i].emit(RESULT_PREFIX + JSON.stringify({ filepath: file, duration: 10 }));
@@ -95,7 +97,7 @@ describe('DownloadQueue', () => {
     await succeed(0);
     expect(deleteFile).toHaveBeenCalledWith('/out/0.mp4');
     // The retry jumps ahead of "b" and must not resume the old partial data.
-    expect(runs[1].args).toEqual(['a', 'fresh']);
+    expect(runs[1].args.slice(0, 2)).toEqual(['a', 'fresh']);
     await succeed(1);
     expect(q.list()[0]).toMatchObject({ status: 'verify_failed', verifyRetries: 1 });
     expect(finished.map((f) => f.status)).toEqual(['verify_failed']);
@@ -112,7 +114,7 @@ describe('DownloadQueue', () => {
     expect(q.get(item.id)!.status).toBe('verify_failed');
     q.retry(item.id);
     await tick();
-    expect(runs[2].args).toEqual(['a', 'fresh']);
+    expect(runs[2].args.slice(0, 2)).toEqual(['a', 'fresh']);
     await succeed(2);
     expect(q.get(item.id)!.status).toBe('done');
   });
@@ -157,5 +159,99 @@ describe('DownloadQueue', () => {
     await tick();
     expect(q.list()[0]).toMatchObject({ status: 'error', error: 'Hazırlık başarısız: boom' });
     expect(runs.map((r) => r.args[0])).toEqual(['b']);
+  });
+
+  it('pauses the running download and resumes without discarding partial data', async () => {
+    const { q, runs, succeed, finished } = setup();
+    const [a] = q.add([{ url: 'a', title: 'A' }, { url: 'b', title: 'B' }]);
+    await tick();
+    q.pause(a.id);
+    await tick();
+    await tick();
+    expect(runs[0].killed).toBe(true);
+    expect(q.get(a.id)!.status).toBe('paused');
+    expect(finished).toEqual([]); // pausing is not finishing
+    // b moves on meanwhile
+    expect(runs[1].args[0]).toBe('b');
+    await succeed(1);
+    q.resume(a.id);
+    await tick();
+    expect(runs[2].args.slice(0, 2)).toEqual(['a', 'resume']);
+  });
+
+  it('global pause stops the current item and starts nothing until resumed', async () => {
+    const { q, runs } = setup();
+    q.add([{ url: 'a', title: 'A' }, { url: 'b', title: 'B' }]);
+    await tick();
+    q.setUserPaused(true);
+    await tick();
+    await tick();
+    expect(runs).toHaveLength(1);
+    expect(q.list().map((i) => i.status)).toEqual(['paused', 'queued']);
+    expect(q.isBusy()).toBe(false); // dependency updates may run while paused
+    q.setUserPaused(false);
+    await tick();
+    expect(runs[1].args[0]).toBe('b');
+  });
+
+  it('restores a saved queue: interrupted downloads are queued again, nothing runs while paused for deps', async () => {
+    const { q: first, runs: r1 } = setup();
+    first.add([{ url: 'a', title: 'A' }, { url: 'b', title: 'B' }]);
+    await tick();
+    const snap = first.snapshot();
+    expect(snap.map((i) => i.status)).toEqual(['downloading', 'queued']);
+    r1[0].finish(1);
+
+    const { q, runs } = setup();
+    q.setPaused(true);
+    q.restore(JSON.parse(JSON.stringify(snap)));
+    await tick();
+    expect(q.list().map((i) => i.status)).toEqual(['queued', 'queued']);
+    expect(runs).toHaveLength(0);
+    expect(q.isBusy()).toBe(false);
+    q.setPaused(false);
+    await tick();
+    expect(runs[0].args[0]).toBe('a');
+  });
+
+  it('skips videos downloaded before, and downloads them when forced', async () => {
+    const { q, runs, finished } = setup(undefined, undefined, {
+      findExisting: async (item) => (item.url === 'a' ? '/out/a.mp4' : null),
+    });
+    const [a] = q.add([{ url: 'a', title: 'A' }, { url: 'b', title: 'B' }]);
+    await tick();
+    await tick();
+    expect(q.get(a.id)).toMatchObject({ status: 'skipped', result: { filepath: '/out/a.mp4' } });
+    expect(finished.map((f) => f.status)).toEqual(['skipped']);
+    expect(runs.map((r) => r.args[0])).toEqual(['b']);
+    runs[0].finish(1);
+    await tick();
+    q.forceDownload(a.id);
+    await tick();
+    await tick();
+    expect(runs[1].args[0]).toBe('a');
+  });
+
+  it('downloads under "(2)" when the file name belongs to another video', async () => {
+    const { q, runs, succeed } = setup(undefined, undefined, {
+      isNameCollision: async (_item, r) => r.filepath === '/out/index.mp4',
+    });
+    const [item] = q.add([{ url: 'b', title: 'B' }]);
+    await tick();
+    runs[0].emit('[download] /out/index.mp4 has already been downloaded');
+    await succeed(0, '/out/index.mp4');
+    expect(runs[1].args).toEqual(['b', 'resume', '2']);
+    await succeed(1, '/out/index (2).mp4');
+    expect(q.get(item.id)).toMatchObject({ status: 'done', outputSuffix: 2 });
+  });
+
+  it('accepts "already downloaded" when the file is the same video', async () => {
+    const { q, runs, succeed } = setup(undefined, undefined, { isNameCollision: async () => false });
+    const [item] = q.add([{ url: 'a', title: 'A' }]);
+    await tick();
+    runs[0].emit('[download] /out/0.mp4 has already been downloaded');
+    await succeed(0);
+    expect(runs).toHaveLength(1);
+    expect(q.get(item.id)!.status).toBe('done');
   });
 });

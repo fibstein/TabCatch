@@ -112,6 +112,13 @@ export class Bridge extends EventEmitter {
     });
   }
 
+  closeTab(clientId: string, tabId: number, url: string): boolean {
+    const conn = this.conns.get(clientId);
+    if (!conn) return false;
+    this.send(conn.ws, { type: 'closeTab', tabId, url });
+    return true;
+  }
+
   private send(ws: WebSocket, msg: AppToExt) {
     ws.send(JSON.stringify(msg));
   }

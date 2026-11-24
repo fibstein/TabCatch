@@ -3,7 +3,16 @@ import { randomUUID } from 'node:crypto';
 import { parseYtDlpLine, type ProgressInfo, type ResultInfo } from './ytdlp';
 import type { VerifyResult } from './verify';
 
-export type ItemStatus = 'queued' | 'downloading' | 'verifying' | 'done' | 'verify_failed' | 'error' | 'canceled';
+export type ItemStatus =
+  | 'queued'
+  | 'downloading'
+  | 'verifying'
+  | 'paused'
+  | 'done'
+  | 'skipped'
+  | 'verify_failed'
+  | 'error'
+  | 'canceled';
 
 export interface QueueItem {
   id: string;
@@ -26,6 +35,10 @@ export interface QueueItem {
   fresh: boolean;
   /** Automatic re-downloads already done because of failed integrity checks. */
   verifyRetries: number;
+  /** >1 when another video already owns the default file name: "<title> [id] (n).ext". */
+  outputSuffix?: number;
+  /** Download even if the history says this video was downloaded before. */
+  force?: boolean;
   log: string[];
   addedAt: number;
 }
@@ -49,14 +62,27 @@ export interface DownloaderDeps {
   /** Automatic re-downloads after a failed integrity check. */
   maxVerifyRetries?: number;
   onFinished?(item: QueueItem): void;
+  /** Before starting: an existing download of the same video, if it should be skipped. */
+  findExisting?(item: QueueItem): Promise<string | null>;
+  /**
+   * yt-dlp reported "has already been downloaded": true when that file belongs to a different
+   * video (same title + id from another site), so this item must be saved under another name.
+   */
+  isNameCollision?(item: QueueItem, result: ResultInfo): Promise<boolean>;
 }
+
+const RESTARTABLE: ItemStatus[] = ['downloading', 'verifying'];
+const MAX_OUTPUT_SUFFIX = 20;
 
 const MAX_LOG_LINES = 400;
 
 export class DownloadQueue extends EventEmitter {
   private items: QueueItem[] = [];
-  private current: { item: QueueItem; handle: RunHandle | null; canceled: boolean } | null = null;
-  private paused = false;
+  private current: Current | null = null;
+  /** Dependency install in progress (Windows locks running executables). */
+  private depsPaused = false;
+  /** "Kuyruğu duraklat" button. */
+  private userPaused = false;
 
   constructor(private readonly deps: DownloaderDeps) {
     super();
@@ -70,17 +96,50 @@ export class DownloadQueue extends EventEmitter {
     return this.items.find((i) => i.id === id);
   }
 
+  /** True while yt-dlp runs or is about to run (the executable must not be replaced then). */
   isBusy(): boolean {
-    return this.current !== null || this.items.some((i) => i.status === 'queued');
+    if (this.current !== null) return true;
+    // Queued items waiting on a pause (e.g. dependencies not installed yet) don't block installs.
+    return !this.userPaused && !this.depsPaused && this.items.some((i) => i.status === 'queued');
   }
 
-  /** Stop starting new items (used while dependencies are being updated). */
+  /** Stop starting new items while dependencies are installed / missing. */
   setPaused(p: boolean) {
-    this.paused = p;
+    this.depsPaused = p;
     if (!p) this.pump();
   }
 
-  add(entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number }[]): QueueItem[] {
+  isUserPaused(): boolean {
+    return this.userPaused;
+  }
+
+  /** Global pause: the running download is stopped (kept resumable) and nothing new starts. */
+  setUserPaused(p: boolean) {
+    this.userPaused = p;
+    if (p && this.current) this.pause(this.current.item.id);
+    this.changed();
+    if (!p) this.pump();
+  }
+
+  /** Items without logs, for saving to disk. */
+  snapshot(): QueueItem[] {
+    return this.list();
+  }
+
+  /** Loads a saved queue. Interrupted downloads go back to the queue; yt-dlp resumes the .part file. */
+  restore(items: QueueItem[], userPaused = false) {
+    this.userPaused = userPaused;
+    this.items = items.map((i) => ({
+      ...i,
+      status: RESTARTABLE.includes(i.status) ? 'queued' : i.status,
+      progress: null,
+      log: [],
+    }));
+    this.changed();
+    this.pump();
+  }
+
+  add(entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number; force?: boolean }[]): QueueItem[] {
     const active = new Set(
       this.items.filter((i) => i.status === 'queued' || i.status === 'downloading').map((i) => i.url),
     );
@@ -89,6 +148,7 @@ export class DownloadQueue extends EventEmitter {
       if (active.has(e.url)) continue;
       active.add(e.url);
       const item: QueueItem = {
+        force: e.force,
         id: randomUUID(),
         url: e.url,
         title: e.title,
@@ -113,15 +173,49 @@ export class DownloadQueue extends EventEmitter {
 
   cancel(id: string) {
     if (this.current?.item.id === id) {
-      this.current.canceled = true;
+      this.current.stop = 'cancel';
       this.current.handle?.kill();
       return;
     }
     const item = this.get(id);
-    if (item && item.status === 'queued') {
+    if (item && (item.status === 'queued' || item.status === 'paused')) {
       item.status = 'canceled';
       this.changed();
     }
+  }
+
+  /** Stops without discarding: the partial file stays and the next run continues it. */
+  pause(id: string) {
+    if (this.current?.item.id === id) {
+      if (this.current.item.status === 'verifying') return; // nearly done, let it finish
+      this.current.stop = 'pause';
+      this.current.handle?.kill();
+      return;
+    }
+    const item = this.get(id);
+    if (item?.status === 'queued') {
+      item.status = 'paused';
+      this.changed();
+    }
+  }
+
+  resume(id: string) {
+    const item = this.get(id);
+    if (item?.status !== 'paused') return;
+    item.status = 'queued';
+    this.changed();
+    this.pump();
+  }
+
+  /** "Yine de indir" for an item skipped because it was downloaded before. */
+  forceDownload(id: string) {
+    const item = this.get(id);
+    if (item?.status !== 'skipped') return;
+    item.force = true;
+    item.status = 'queued';
+    item.result = undefined;
+    this.changed();
+    this.pump();
   }
 
   retry(id: string) {
@@ -154,7 +248,7 @@ export class DownloadQueue extends EventEmitter {
   }
 
   private pump() {
-    if (this.current || this.paused) return;
+    if (this.current || this.depsPaused || this.userPaused) return;
     const next = this.items.find((i) => i.status === 'queued');
     if (!next) {
       this.emit('idle');
@@ -163,16 +257,36 @@ export class DownloadQueue extends EventEmitter {
     void this.run(next);
   }
 
-  private async run(item: QueueItem) {
-    item.status = 'downloading';
-    item.attempts += 1;
-    item.progress = null;
-    item.result = undefined;
-    item.verify = undefined;
-    item.log.push(`--- deneme ${item.attempts}${item.fresh ? ' (sıfırdan)' : ''} ---`);
-    const current: { item: QueueItem; handle: RunHandle | null; canceled: boolean } = { item, handle: null, canceled: false };
-    this.current = current;
+  private finishEarly(item: QueueItem, status: ItemStatus) {
+    this.current = null;
+    item.status = status;
     this.changed();
+    if (status !== 'paused') this.deps.onFinished?.(item);
+    this.pump();
+  }
+
+  private async run(item: QueueItem) {
+    const current: Current = { item, handle: null, stop: null };
+    this.current = current;
+    item.status = 'downloading';
+    item.progress = null;
+    item.verify = undefined;
+    item.error = undefined;
+    this.changed();
+
+    if (!item.force && this.deps.findExisting) {
+      const existing = await this.deps.findExisting(item).catch(() => null);
+      if (existing) {
+        item.result = { filepath: existing, duration: null };
+        item.log.push(`Daha önce indirilmiş, atlandı: ${existing}`);
+        this.finishEarly(item, current.stop === 'pause' ? 'paused' : current.stop === 'cancel' ? 'canceled' : 'skipped');
+        return;
+      }
+    }
+
+    item.attempts += 1;
+    item.result = undefined;
+    item.log.push(`--- deneme ${item.attempts}${item.fresh ? ' (sıfırdan)' : ''}${item.outputSuffix ? ` (dosya adı ${item.outputSuffix})` : ''} ---`);
 
     let args: string[] | null = null;
     try {
@@ -180,14 +294,10 @@ export class DownloadQueue extends EventEmitter {
     } catch (err) {
       item.log.push(`Hazırlık başarısız: ${(err as Error).message}`);
     }
-    if (!args || current.canceled) {
+    if (!args || current.stop) {
       await this.deps.afterRun?.(item).catch(() => undefined);
-      this.current = null;
-      item.status = current.canceled ? 'canceled' : 'error';
-      if (!current.canceled) item.error = item.log[item.log.length - 1];
-      this.changed();
-      this.deps.onFinished?.(item);
-      this.pump();
+      if (!current.stop) item.error = item.log[item.log.length - 1];
+      this.finishEarly(item, current.stop === 'pause' ? 'paused' : current.stop === 'cancel' ? 'canceled' : 'error');
       return;
     }
     const handle = this.deps.runner(args);
@@ -219,19 +329,42 @@ export class DownloadQueue extends EventEmitter {
       item.log.push(String(err));
     }
     await this.deps.afterRun?.(item).catch(() => undefined);
-    const canceled = current.canceled;
     this.current = null;
+    // Set from the line callback; TypeScript can't see that and would narrow it to undefined.
+    const result = item.result as ResultInfo | undefined;
 
-    if (canceled) {
+    if (current.stop === 'cancel') {
       item.status = 'canceled';
+    } else if (current.stop === 'pause') {
+      item.status = 'paused';
+      item.progress = null;
+      this.changed();
+      this.pump();
+      return;
     } else if (code !== 0) {
       item.status = 'error';
       item.error = lastError(item.log) ?? `yt-dlp çıkış kodu ${code}`;
-    } else if (!item.result) {
+    } else if (!result) {
       item.status = 'error';
       item.error = 'yt-dlp dosya yolunu bildirmedi';
+    } else if (
+      item.log.some((l) => l.includes('has already been downloaded')) &&
+      (await this.deps.isNameCollision?.(item, result).catch(() => false))
+    ) {
+      // Another video owns this file name; download again under "<name> (n)".
+      const next = (item.outputSuffix ?? 1) + 1;
+      if (next > MAX_OUTPUT_SUFFIX) {
+        item.status = 'error';
+        item.error = 'Aynı adlı çok fazla dosya var';
+      } else {
+        item.log.push(`Dosya adı başka bir videoya ait (${result.filepath}), farklı adla indirilecek`);
+        item.outputSuffix = next;
+        item.result = undefined;
+        item.status = 'queued';
+        this.items = [item, ...this.items.filter((i) => i !== item)];
+      }
     } else {
-      await this.verifyItem(item, item.result);
+      await this.verifyItem(item, result);
     }
     this.changed();
     // verifyItem may have re-queued the item for an automatic fresh download.
@@ -274,4 +407,10 @@ function lastError(log: string[]): string | undefined {
     if (log[i].startsWith('ERROR:')) return log[i].slice(6).trim();
   }
   return undefined;
+}
+
+interface Current {
+  item: QueueItem;
+  handle: RunHandle | null;
+  stop: 'cancel' | 'pause' | null;
 }

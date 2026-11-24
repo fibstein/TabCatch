@@ -39,6 +39,8 @@ export type AppToExt =
   | { type: 'requestTabs'; requestId: string }
   /** Cookies the browser would send to `url`, from the cookie store of `tabId` when given. */
   | { type: 'requestCookies'; requestId: string; url: string; tabId?: number }
+  /** Close the tab after its video was downloaded, only if it still shows `url`. */
+  | { type: 'closeTab'; tabId: number; url: string }
   | { type: 'pong' };
 
 const BLOCKED_SCHEMES = [

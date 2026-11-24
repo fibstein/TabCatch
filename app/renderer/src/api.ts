@@ -20,6 +20,11 @@ export interface TabCatchApi {
     list(): Promise<QueueItem[]>;
     add(entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number }[]): Promise<QueueItem[]>;
     cancel(id: string): Promise<void>;
+    pause(id: string): Promise<void>;
+    resume(id: string): Promise<void>;
+    force(id: string): Promise<void>;
+    setPaused(paused: boolean): Promise<void>;
+    isPaused(): Promise<boolean>;
     retry(id: string): Promise<void>;
     remove(id: string): Promise<void>;
     log(id: string): Promise<string>;

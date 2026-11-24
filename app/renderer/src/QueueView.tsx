@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, errMsg, type QueueItem } from './api';
 import { formatBytes } from './SetupView';
 
@@ -6,7 +6,9 @@ const STATUS: Record<QueueItem['status'], string> = {
   queued: 'Sırada',
   downloading: 'İndiriliyor',
   verifying: 'Doğrulanıyor',
+  paused: 'Duraklatıldı',
   done: 'Tamamlandı',
+  skipped: 'Daha önce indirildi',
   verify_failed: 'Dosya sorunlu',
   error: 'Hata',
   canceled: 'İptal edildi',
@@ -78,7 +80,12 @@ function Item({ item, onError }: { item: QueueItem; onError: (m: string) => void
       )}
 
       <div className="actions small">
-        {(item.status === 'queued' || item.status === 'downloading') && <button onClick={wrap(() => q.cancel(item.id))}>İptal</button>}
+        {(item.status === 'queued' || item.status === 'downloading') && <button onClick={wrap(() => q.pause(item.id))}>Duraklat</button>}
+        {item.status === 'paused' && <button onClick={wrap(() => q.resume(item.id))}>Devam et</button>}
+        {item.status === 'skipped' && <button onClick={wrap(() => q.force(item.id))}>Yine de indir</button>}
+        {(item.status === 'queued' || item.status === 'downloading' || item.status === 'paused') && (
+          <button onClick={wrap(() => q.cancel(item.id))}>İptal</button>
+        )}
         {['error', 'canceled', 'verify_failed'].includes(item.status) && (
           <button onClick={wrap(() => q.retry(item.id))}>Yeniden indir</button>
         )}
@@ -102,12 +109,38 @@ function Item({ item, onError }: { item: QueueItem; onError: (m: string) => void
 }
 
 export function QueueView({ items, onError }: { items: QueueItem[]; onError: (m: string) => void }) {
+  const [paused, setPaused] = useState(false);
+  // Re-read after every queue change: pausing is also triggered from the main process.
+  useEffect(() => {
+    void api().queue.isPaused().then(setPaused);
+  }, [items]);
+
   if (!items.length) return <p className="muted">Kuyruk boş. "Tablar" sekmesinden video seç.</p>;
+  const finished = items.filter((i) => ['done', 'skipped', 'canceled'].includes(i.status));
+  const toggle = () =>
+    void api()
+      .queue.setPaused(!paused)
+      .then(() => setPaused(!paused))
+      .catch((e) => onError(errMsg(e)));
   return (
-    <ul className="queue">
-      {items.map((i) => (
-        <Item key={i.id} item={i} onError={onError} />
-      ))}
-    </ul>
+    <>
+      <div className="toolbar">
+        <button className={paused ? 'primary' : ''} onClick={toggle}>
+          {paused ? 'Kuyruğu sürdür' : 'Kuyruğu duraklat'}
+        </button>
+        {paused && <span className="muted small">Duraklatıldı. Yarım kalan indirme kaldığı yerden devam edecek.</span>}
+        <span className="spacer" />
+        {finished.length > 0 && (
+          <button onClick={() => void Promise.all(finished.map((i) => api().queue.remove(i.id))).catch((e) => onError(errMsg(e)))}>
+            Bitenleri temizle ({finished.length})
+          </button>
+        )}
+      </div>
+      <ul className="queue">
+        {items.map((i) => (
+          <Item key={i.id} item={i} onError={onError} />
+        ))}
+      </ul>
+    </>
   );
 }

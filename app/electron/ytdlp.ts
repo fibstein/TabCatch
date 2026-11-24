@@ -9,6 +9,12 @@ export interface YtDlpArgsOptions {
   /** Retry after a failed integrity check: don't resume a possibly broken partial file. */
   fresh?: boolean;
   cookiesFile?: string;
+  /** >1 when the default file name is taken by another video. */
+  outputSuffix?: number;
+}
+
+export function outputTemplate(suffix?: number): string {
+  return suffix && suffix > 1 ? `%(title).150B [%(id)s] (${suffix}).%(ext)s` : '%(title).150B [%(id)s].%(ext)s';
 }
 
 export const PROGRESS_PREFIX = 'TABCATCH_PROGRESS ';
@@ -44,7 +50,7 @@ export function buildYtDlpArgs(o: YtDlpArgsOptions): string[] {
     '--progress-template',
     `download:${PROGRESS_PREFIX}%(progress)j`,
     '--print',
-    `after_move:${RESULT_PREFIX}%(.{filepath,duration,id,title,ext,vcodec,acodec})j`,
+    `after_move:${RESULT_PREFIX}%(.{filepath,duration,id,title,ext,vcodec,acodec,extractor_key,webpage_url})j`,
     // yt-dlp skips missing HLS/DASH fragments by default and still reports success,
     // which produces files that freeze or jump when seeking. Fail loudly instead.
     '--abort-on-unavailable-fragments',
@@ -61,7 +67,7 @@ export function buildYtDlpArgs(o: YtDlpArgsOptions): string[] {
     '-P',
     o.outputDir,
     '-o',
-    '%(title).150B [%(id)s].%(ext)s',
+    outputTemplate(o.outputSuffix),
     ...presetArgs(o.preset),
   ];
   if (o.fresh) args.push('--no-continue', '--force-overwrites');
@@ -89,6 +95,8 @@ export interface ResultInfo {
   ext?: string;
   vcodec?: string;
   acodec?: string;
+  extractor?: string;
+  webpageUrl?: string;
 }
 
 export type ParsedLine =
@@ -142,6 +150,8 @@ export function parseYtDlpLine(line: string): ParsedLine {
             ext: typeof r.ext === 'string' ? r.ext : undefined,
             vcodec: typeof r.vcodec === 'string' ? r.vcodec : undefined,
             acodec: typeof r.acodec === 'string' ? r.acodec : undefined,
+            extractor: typeof r.extractor_key === 'string' ? r.extractor_key : undefined,
+            webpageUrl: typeof r.webpage_url === 'string' ? r.webpage_url : undefined,
           },
         };
       }

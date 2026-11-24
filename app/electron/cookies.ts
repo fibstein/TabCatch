@@ -22,6 +22,10 @@ export function cookieDecision(url: string, s: CookieSettings): CookieDecision {
  * The extension gets a new connection id whenever its service worker restarts, so fall back to
  * another connection of the same browser when the original one is gone.
  */
+/**
+ * Tab ids are unique within a browser session, so after a reconnect the same browser's new
+ * connection can still address the tab.
+ */
 export function pickCookieClient(clients: BridgeClient[], item: { clientId?: string; browser?: string }): BridgeClient | undefined {
   const exact = clients.find((c) => c.id === item.clientId);
   if (exact) return exact;

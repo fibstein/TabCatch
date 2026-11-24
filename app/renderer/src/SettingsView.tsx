@@ -62,6 +62,24 @@ export function SettingsView({
           ))}
         </div>
         <label className="check">
+          <input type="checkbox" checked={settings.skipDownloaded} onChange={(e) => set({ skipDownloaded: e.target.checked })} />
+          <span>
+            Daha önce indirilen videoları atla
+            <div className="muted small">Dosya hâlâ duruyorsa aynı video tekrar indirilmez. Kuyrukta "Yine de indir" ile geçilebilir.</div>
+          </span>
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings.closeTabAfterDownload}
+            onChange={(e) => set({ closeTabAfterDownload: e.target.checked })}
+          />
+          <span>
+            İndirme bitince tarayıcıdaki tabı kapat
+            <div className="muted small">Sadece doğrulamadan geçen videolarda ve tab hâlâ aynı sayfadaysa kapatılır.</div>
+          </span>
+        </label>
+        <label className="check">
           <input type="checkbox" checked={settings.deepCheck} onChange={(e) => set({ deepCheck: e.target.checked })} />
           <span>
             Derin kontrol

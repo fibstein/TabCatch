@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { BRIDGE_PORT, isCandidateUrl } from '../../shared/protocol';
@@ -13,6 +13,8 @@ import { defaultSettings, SettingsStore, type Settings } from './settings';
 import { deepCheck, repairFile, verifyFile, type RepairMode, type VerifyExpectations } from './verify';
 import { buildYtDlpArgs } from './ytdlp';
 import { cookieDecision, deleteCookieFile, pickCookieClient, writeCookieFile } from './cookies';
+import { History, historyKey } from './history';
+import { loadQueue, QueueSaver } from './queueStore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -33,6 +35,9 @@ const fetchImpl = (url: string) => net.fetch(url); // follows the system proxy s
 
 const settings = new SettingsStore(join(userData, 'settings.json'), defaultSettings(join(app.getPath('downloads'), 'TabCatch')));
 const bridge = new Bridge(BRIDGE_PORT, () => settings.allowedExtensionIds());
+const history = new History(join(userData, 'history.json'));
+const queueSaver = new QueueSaver(join(userData, 'queue.json'));
+let quitting = false;
 
 let win: BrowserWindow | null = null;
 let depStatus: DepStatus[] = [];
@@ -59,7 +64,17 @@ const queue = new DownloadQueue({
       denoPath: bin('deno'),
       fresh: item.fresh,
       cookiesFile,
+      outputSuffix: item.outputSuffix,
     });
+  },
+  findExisting: async (item) => {
+    if (!settings.get().skipDownloaded) return null;
+    return (await history.existing({ url: item.url }))?.filepath ?? null;
+  },
+  isNameCollision: async (item, result) => {
+    const owner = history.findByPath(result.filepath);
+    if (!owner) return false; // not ours (e.g. downloaded by hand earlier): keep yt-dlp's behaviour
+    return owner.key !== historyKey({ url: item.url, extractor: result.extractor, id: result.id });
   },
   afterRun: (item) => deleteCookieFile(cookieDir, item.id),
   verify: async (item, result) => {
@@ -76,10 +91,34 @@ const queue = new DownloadQueue({
     void mkdir(logDir, { recursive: true }).then(() =>
       writeFile(join(logDir, `${item.id}.log`), [item.url, ...item.log].join('\n')),
     );
+    if (item.status === 'done' && item.result) void recordHistory(item);
+    if ((item.status === 'done' || item.status === 'skipped') && settings.get().closeTabAfterDownload) closeSourceTab(item);
   },
 });
+// Nothing starts until the dependencies are confirmed installed (see refreshDeps).
+queue.setPaused(true);
 
-queue.on('update', (items) => send('queue:update', items));
+async function recordHistory(item: QueueItem) {
+  const r = item.result!;
+  const size = await stat(r.filepath).then((s) => s.size).catch(() => undefined);
+  await history.add({ url: item.url, extractor: r.extractor, id: r.id, filepath: r.filepath, size }).catch(() => undefined);
+}
+
+function closeSourceTab(item: QueueItem) {
+  if (item.tabId === undefined) return;
+  const client = pickCookieClient(bridge.clients(), item);
+  // The extension double-checks that the tab still shows this URL before closing it.
+  if (client) bridge.closeTab(client.id, item.tabId, item.url);
+}
+
+const saveQueue = () => {
+  if (!quitting) queueSaver.schedule({ version: 1, userPaused: queue.isUserPaused(), items: queue.snapshot() });
+};
+
+queue.on('update', (items) => {
+  send('queue:update', items);
+  saveQueue();
+});
 queue.on('idle', () => void applyPendingUpdates());
 bridge.on('clients', (clients) => send('bridge:clients', clients));
 
@@ -122,6 +161,7 @@ async function refreshDeps(): Promise<DepStatus[]> {
   const prev = new Map(depStatus.map((d) => [d.id, d.updateAvailable]));
   depStatus = (await checkDeps(defs, binDir)).map((d) => ({ ...d, updateAvailable: prev.get(d.id) ?? null }));
   send('deps:status', depStatus);
+  if (!installing) queue.setPaused(!depsReady());
   return depStatus;
 }
 
@@ -149,9 +189,8 @@ async function install(ids: DepId[]): Promise<DepStatus[]> {
     }
   } finally {
     installing = false;
-    queue.setPaused(false);
   }
-  await refreshDeps();
+  await refreshDeps(); // also unpauses the queue if everything is installed
   if (errors.length) throw new Error(errors.join('\n'));
   return depStatus;
 }
@@ -202,6 +241,11 @@ function registerIpc() {
     return queue.add(entries.filter((e) => isCandidateUrl(e.url)));
   });
   ipcMain.handle('queue:cancel', (_e, id: string) => queue.cancel(id));
+  ipcMain.handle('queue:pause', (_e, id: string) => queue.pause(id));
+  ipcMain.handle('queue:resume', (_e, id: string) => queue.resume(id));
+  ipcMain.handle('queue:force', (_e, id: string) => queue.forceDownload(id));
+  ipcMain.handle('queue:setPaused', (_e, paused: boolean) => queue.setUserPaused(paused));
+  ipcMain.handle('queue:isPaused', () => queue.isUserPaused());
   ipcMain.handle('queue:retry', (_e, id: string) => queue.retry(id));
   ipcMain.handle('queue:remove', (_e, id: string) => queue.remove(id));
   ipcMain.handle('queue:log', (_e, id: string) => queue.get(id)?.log.join('\n') ?? '');
@@ -222,6 +266,7 @@ function registerIpc() {
         error: verify.ok ? undefined : verify.problems.join('; '),
         result: { ...item.result, filepath: path },
       });
+      if (verify.ok) await recordHistory(queue.get(id)!);
       return verify;
     } catch (err) {
       queue.update(id, { status: 'verify_failed', error: (err as Error).message });
@@ -274,6 +319,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     await rm(cookieDir, { recursive: true, force: true });
+    const saved = loadQueue(join(userData, 'queue.json'));
+    if (saved) queue.restore(saved.items, saved.userPaused);
     registerIpc();
     createWindow();
     try {
@@ -286,7 +333,13 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('window-all-closed', async () => {
-    for (const item of queue.list()) if (item.status === 'downloading') queue.cancel(item.id);
+    // Save the queue as it is now: the running download comes back as "queued" next time and
+    // yt-dlp continues its .part file. Then stop writing, so killing yt-dlp below doesn't
+    // overwrite that state with "paused"/"canceled".
+    queueSaver.schedule({ version: 1, userPaused: queue.isUserPaused(), items: queue.snapshot() });
+    await queueSaver.flush();
+    quitting = true;
+    for (const item of queue.list()) if (item.status === 'downloading') queue.pause(item.id);
     await bridge.stop();
     await rm(cookieDir, { recursive: true, force: true });
     app.quit();

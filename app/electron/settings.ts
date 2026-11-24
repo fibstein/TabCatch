@@ -14,6 +14,10 @@ export interface Settings {
   sendCookies: boolean;
   /** Separate opt-in for YouTube: not needed for public videos, and risky for the account. */
   sendYouTubeCookies: boolean;
+  /** Don't download a video again when its earlier download still exists. */
+  skipDownloaded: boolean;
+  /** Close the browser tab once its video was downloaded and verified. */
+  closeTabAfterDownload: boolean;
   lastUpdateCheck: number;
   /** Extra IDs for development builds loaded without the fixed manifest key. */
   extraExtensionIds: string[];
@@ -27,6 +31,8 @@ export function defaultSettings(downloadsDir: string): Settings {
     autoUpdateYtDlp: true,
     sendCookies: true,
     sendYouTubeCookies: false,
+    skipDownloaded: true,
+    closeTabAfterDownload: false,
     lastUpdateCheck: 0,
     extraExtensionIds: [],
   };

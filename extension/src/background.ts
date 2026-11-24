@@ -92,6 +92,14 @@ async function collectCookies(url: string, tabId?: number): Promise<CookieInfo[]
 async function handle(msg: AppToExt) {
   if (msg.type === 'requestTabs') {
     send({ type: 'tabs', requestId: msg.requestId, browser, tabs: await collectTabs() });
+  } else if (msg.type === 'closeTab') {
+    try {
+      const tab = await chrome.tabs.get(msg.tabId);
+      // The user may have navigated elsewhere in that tab meanwhile; then leave it alone.
+      if (tab.url === msg.url) await chrome.tabs.remove(msg.tabId);
+    } catch {
+      /* tab already closed */
+    }
   } else if (msg.type === 'requestCookies') {
     try {
       send({ type: 'cookies', requestId: msg.requestId, cookies: await collectCookies(msg.url, msg.tabId) });

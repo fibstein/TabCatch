@@ -5,8 +5,10 @@ import type { QueueItem } from '../../electron/downloader';
 import type { Settings } from '../../electron/settings';
 import type { BridgeClient, BrowserTabs } from '../../electron/bridge';
 import type { VerifyResult } from '../../electron/verify';
+import type { ProbeContext, ProbeResult } from '../../electron/probe';
+import type { NewItem } from '../../electron/downloader';
 
-export type { DepStatus, InstallProgress, DepId, QueueItem, Settings, BridgeClient, BrowserTabs, VerifyResult };
+export type { DepStatus, InstallProgress, DepId, QueueItem, Settings, BridgeClient, BrowserTabs, VerifyResult, ProbeResult, NewItem };
 
 export interface TabCatchApi {
   deps: {
@@ -15,10 +17,14 @@ export interface TabCatchApi {
     checkUpdates(): Promise<DepStatus[]>;
   };
   bridge: { clients(): Promise<BridgeClient[]> };
-  tabs: { refresh(): Promise<BrowserTabs[]> };
+  tabs: {
+    refresh(): Promise<BrowserTabs[]>;
+    probe(url: string, ctx: ProbeContext): Promise<ProbeResult>;
+    playlist(url: string, ctx: ProbeContext): Promise<ProbeResult>;
+  };
   queue: {
     list(): Promise<QueueItem[]>;
-    add(entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number }[]): Promise<QueueItem[]>;
+    add(entries: NewItem[]): Promise<{ added: number; playlists: string[] }>;
     cancel(id: string): Promise<void>;
     pause(id: string): Promise<void>;
     resume(id: string): Promise<void>;

@@ -92,6 +92,10 @@ async function collectCookies(url: string, tabId?: number): Promise<CookieInfo[]
 async function handle(msg: AppToExt) {
   if (msg.type === 'requestTabs') {
     send({ type: 'tabs', requestId: msg.requestId, browser, tabs: await collectTabs() });
+  } else if (msg.type === 'enqueueResult') {
+    const done = pendingEnqueue.get(msg.requestId);
+    pendingEnqueue.delete(msg.requestId);
+    done?.(msg.ok, msg.message);
   } else if (msg.type === 'closeTab') {
     try {
       const tab = await chrome.tabs.get(msg.tabId);
@@ -133,6 +137,65 @@ function connect() {
   };
   ws.onerror = () => ws.close();
 }
+
+// ---- "TabCatch'e gönder": context menu + toolbar button --------------------------------
+
+const MENU_ID = 'tabcatch-send';
+const pendingEnqueue = new Map<string, (ok: boolean, message: string) => void>();
+
+function flashBadge(tabId: number | undefined, ok: boolean, title: string) {
+  void chrome.action.setBadgeBackgroundColor({ color: ok ? '#1d8a4a' : '#c23434', tabId });
+  void chrome.action.setBadgeText({ text: ok ? '✓' : '!', tabId });
+  void chrome.action.setTitle({ title, tabId });
+  setTimeout(() => {
+    void chrome.action.setBadgeText({ text: '', tabId });
+    void chrome.action.setTitle({ title: "TabCatch'e gönder", tabId });
+  }, ok ? 2500 : 6000);
+}
+
+function sendToApp(items: { url: string; title: string; tabId?: number }[], badgeTab?: number) {
+  if (socket?.readyState !== WebSocket.OPEN) {
+    flashBadge(badgeTab, false, 'TabCatch uygulaması açık değil');
+    return;
+  }
+  const requestId = crypto.randomUUID();
+  const timer = setTimeout(() => {
+    pendingEnqueue.delete(requestId);
+    flashBadge(badgeTab, false, 'TabCatch yanıt vermedi');
+  }, 30_000);
+  pendingEnqueue.set(requestId, (ok, message) => {
+    clearTimeout(timer);
+    flashBadge(badgeTab, ok, message);
+  });
+  send({ type: 'enqueue', requestId, browser, items });
+}
+
+const isWeb = (u: string | undefined): u is string => !!u && /^https?:/.test(u);
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: MENU_ID,
+    title: "TabCatch'e gönder",
+    contexts: ['page', 'link', 'video', 'audio'],
+  });
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== MENU_ID) return;
+  // <video> sources are often blob: URLs (MSE); then the page itself is what yt-dlp needs.
+  const media = isWeb(info.srcUrl) ? info.srcUrl : undefined;
+  const link = isWeb(info.linkUrl) ? info.linkUrl : undefined;
+  const page = isWeb(info.pageUrl) ? info.pageUrl : tab?.url;
+  const url = link ?? media ?? page;
+  if (!isWeb(url)) return flashBadge(tab?.id, false, 'Bu adres indirilemez');
+  const isPage = url === tab?.url;
+  sendToApp([{ url, title: isPage ? (tab?.title ?? url) : url, tabId: isPage ? tab?.id : undefined }], tab?.id);
+});
+
+chrome.action.onClicked.addListener((tab) => {
+  if (!isWeb(tab.url)) return flashBadge(tab.id, false, 'Bu sayfa indirilemez');
+  sendToApp([{ url: tab.url, title: tab.title ?? tab.url, tabId: tab.id }], tab.id);
+});
 
 chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {

@@ -74,6 +74,17 @@ describe('Bridge', () => {
     ext.close();
   });
 
+  it('relays "send to TabCatch" from the extension and answers it', async () => {
+    bridge = new Bridge(PORT, () => [ID]);
+    await bridge.start();
+    bridge.on('enqueue', (e) => bridge!.replyEnqueue(e.clientId, e.requestId, true, `ok ${e.items.length} ${e.browser}`));
+    const ext = await connect(`chrome-extension://${ID}`);
+    const reply = new Promise((resolve) => ext.on('message', (raw) => resolve(JSON.parse(raw.toString()))));
+    ext.send(JSON.stringify({ type: 'enqueue', requestId: 'r1', browser: 'opera', items: [{ url: 'https://v.com/1', title: 'V', tabId: 3 }, { bad: true }] }));
+    expect(await reply).toEqual({ type: 'enqueueResult', requestId: 'r1', ok: true, message: 'ok 1 opera' });
+    ext.close();
+  });
+
   it('skips browsers that do not answer', async () => {
     bridge = new Bridge(PORT, () => [ID]);
     await bridge.start();

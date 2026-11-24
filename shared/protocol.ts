@@ -33,6 +33,8 @@ export type ExtToApp =
   | { type: 'hello'; browser: BrowserName; extensionVersion: string; canReadCookies: boolean }
   | { type: 'tabs'; requestId: string; browser: BrowserName; tabs: TabInfo[] }
   | { type: 'cookies'; requestId: string; cookies: CookieInfo[]; error?: string }
+  /** "TabCatch'e gönder" from the context menu or toolbar button. */
+  | { type: 'enqueue'; requestId: string; browser: BrowserName; items: { url: string; title: string; tabId?: number }[] }
   | { type: 'ping' };
 
 export type AppToExt =
@@ -41,6 +43,7 @@ export type AppToExt =
   | { type: 'requestCookies'; requestId: string; url: string; tabId?: number }
   /** Close the tab after its video was downloaded, only if it still shows `url`. */
   | { type: 'closeTab'; tabId: number; url: string }
+  | { type: 'enqueueResult'; requestId: string; ok: boolean; message: string }
   | { type: 'pong' };
 
 const BLOCKED_SCHEMES = [
@@ -108,6 +111,17 @@ export function parseExtMessage(raw: string): ExtToApp | null {
         });
       }
       return { type: 'cookies', requestId: m.requestId, cookies, error: typeof m.error === 'string' ? m.error : undefined };
+    }
+    case 'enqueue': {
+      if (typeof m.requestId !== 'string' || !Array.isArray(m.items)) return null;
+      const items: { url: string; title: string; tabId?: number }[] = [];
+      for (const it of m.items as unknown[]) {
+        if (!it || typeof it !== 'object') continue;
+        const r = it as Record<string, unknown>;
+        if (typeof r.url !== 'string') continue;
+        items.push({ url: r.url, title: typeof r.title === 'string' ? r.title : r.url, tabId: typeof r.tabId === 'number' ? r.tabId : undefined });
+      }
+      return { type: 'enqueue', requestId: m.requestId, browser: asBrowser(m.browser), items };
     }
     case 'tabs': {
       if (typeof m.requestId !== 'string' || !Array.isArray(m.tabs)) return null;

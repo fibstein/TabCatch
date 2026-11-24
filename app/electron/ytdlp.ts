@@ -22,7 +22,7 @@ export const RESULT_PREFIX = 'TABCATCH_RESULT ';
 
 const FASTSTART = ['--postprocessor-args', 'Merger+ffmpeg_o:-movflags +faststart'];
 
-function presetArgs(preset: FormatPreset): string[] {
+export function presetArgs(preset: FormatPreset): string[] {
   switch (preset) {
     // H.264 + AAC in MP4: decoded in hardware almost everywhere, so seeking stays smooth in
     // Windows' built-in players. "vcodec:h264" = best codec no better than h264.

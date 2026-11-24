@@ -15,7 +15,11 @@ const api = {
     checkUpdates: () => invoke('deps:checkUpdates'),
   },
   bridge: { clients: () => invoke('bridge:clients') },
-  tabs: { refresh: () => invoke('tabs:refresh') },
+  tabs: {
+    refresh: () => invoke('tabs:refresh'),
+    probe: (url: string, ctx: unknown) => invoke('tabs:probe', url, ctx),
+    playlist: (url: string, ctx: unknown) => invoke('tabs:playlist', url, ctx),
+  },
   queue: {
     list: () => invoke('queue:list'),
     add: (entries: unknown[]) => invoke('queue:add', entries),

@@ -73,9 +73,13 @@ table.deps td { padding: 8px 6px; border-top: 1px solid var(--border); vertical-
 .progress-cell { width: 40%; }
 progress { width: 100%; height: 8px; }
 ul.tabs, ul.queue { list-style: none; margin: 0; padding: 0; }
-ul.tabs li { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
-ul.tabs li:hover { background: var(--bg); }
-ul.tabs li.selected { background: var(--sel); }
+.tab-row { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.tab-row:hover { background: var(--bg); }
+.tab-row.selected { background: var(--sel); }
+.tab-row.disabled { cursor: default; }
+.playlist { margin: 4px 0 8px 34px; padding: 8px; border-left: 2px solid var(--border); }
+.tag { margin-left: 8px; font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--bg); color: var(--warn); }
+button.small { padding: 3px 8px; font-size: 12px; }
 ul.tabs img, .favicon { width: 16px; height: 16px; flex-shrink: 0; }
 .tab-text { min-width: 0; flex: 1; }
 .queue-item { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px; }

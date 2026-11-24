@@ -39,6 +39,9 @@ export interface QueueItem {
   outputSuffix?: number;
   /** Download even if the history says this video was downloaded before. */
   force?: boolean;
+  /** From the pre-check, when known: lets the history recognise the video under another URL. */
+  extractor?: string;
+  videoId?: string;
   log: string[];
   addedAt: number;
 }
@@ -139,7 +142,7 @@ export class DownloadQueue extends EventEmitter {
     this.pump();
   }
 
-  add(entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number; force?: boolean }[]): QueueItem[] {
+  add(entries: NewItem[]): QueueItem[] {
     const active = new Set(
       this.items.filter((i) => i.status === 'queued' || i.status === 'downloading').map((i) => i.url),
     );
@@ -149,6 +152,8 @@ export class DownloadQueue extends EventEmitter {
       active.add(e.url);
       const item: QueueItem = {
         force: e.force,
+        extractor: e.extractor,
+        videoId: e.videoId,
         id: randomUUID(),
         url: e.url,
         title: e.title,
@@ -407,6 +412,17 @@ function lastError(log: string[]): string | undefined {
     if (log[i].startsWith('ERROR:')) return log[i].slice(6).trim();
   }
   return undefined;
+}
+
+export interface NewItem {
+  url: string;
+  title: string;
+  browser?: string;
+  clientId?: string;
+  tabId?: number;
+  force?: boolean;
+  extractor?: string;
+  videoId?: string;
 }
 
 interface Current {

@@ -7,7 +7,9 @@ import { Bridge } from './bridge';
 import { checkDeps, checkUpdates, type DepStatus } from './deps/check';
 import { installDep, type InstallProgress } from './deps/install';
 import { exe, getDepDefs, type DepId } from './deps/manifest';
-import { DownloadQueue, type QueueItem } from './downloader';
+import { DownloadQueue, type NewItem, type QueueItem } from './downloader';
+import { buildProbeArgs, ProbeService, type ProbeContext, type ProbeResult } from './probe';
+import { randomUUID } from 'node:crypto';
 import { spawnRunner } from './runner';
 import { defaultSettings, SettingsStore, type Settings } from './settings';
 import { deepCheck, repairFile, verifyFile, type RepairMode, type VerifyExpectations } from './verify';
@@ -55,7 +57,9 @@ const queue = new DownloadQueue({
   runner: (args) => spawnRunner(bin('yt-dlp'), args),
   buildArgs: async (item) => {
     const s = settings.get();
-    const cookiesFile = await prepareCookies(item);
+    const { file: cookiesFile, note } = await prepareCookieFile(item.url, item, item.id);
+    item.cookieNote = note;
+    if (note) item.log.push(`[cookie] ${note}`);
     return buildYtDlpArgs({
       url: item.url,
       outputDir: s.outputDir,
@@ -69,7 +73,7 @@ const queue = new DownloadQueue({
   },
   findExisting: async (item) => {
     if (!settings.get().skipDownloaded) return null;
-    return (await history.existing({ url: item.url }))?.filepath ?? null;
+    return (await history.existing({ url: item.url, extractor: item.extractor, id: item.videoId }))?.filepath ?? null;
   },
   isNameCollision: async (item, result) => {
     const owner = history.findByPath(result.filepath);
@@ -121,40 +125,79 @@ queue.on('update', (items) => {
 });
 queue.on('idle', () => void applyPendingUpdates());
 bridge.on('clients', (clients) => send('bridge:clients', clients));
+bridge.on(
+  'enqueue',
+  async (e: { clientId: string; requestId: string; browser: string; items: { url: string; title: string; tabId?: number }[] }) => {
+    try {
+      const r = await enqueue(e.items.map((i) => ({ ...i, browser: e.browser, clientId: e.clientId })));
+      if (r.playlists.length) {
+        send('app:error', `Playlist tek seferde eklenmez. "Tablar" sekmesinde playlist'i açıp videoları seç: ${r.playlists[0]}`);
+      }
+      const msg = r.added ? `Kuyruğa eklendi (${r.added})` : r.playlists.length ? "Playlist: TabCatch'te videoları seç" : 'Zaten kuyrukta';
+      bridge.replyEnqueue(e.clientId, e.requestId, r.added > 0, msg);
+    } catch (err) {
+      bridge.replyEnqueue(e.clientId, e.requestId, false, (err as Error).message);
+    }
+  },
+);
 
-/** Fetches the cookies for this one URL from the browser the tab is open in; never fails the download. */
-async function prepareCookies(item: QueueItem): Promise<string | undefined> {
-  const note = (text: string | undefined) => {
-    item.cookieNote = text;
-    if (text) item.log.push(`[cookie] ${text}`);
-  };
-  const decision = cookieDecision(item.url, settings.get());
-  if (!decision.send) {
-    note(decision.note);
-    return undefined;
-  }
-  const client = pickCookieClient(bridge.clients(), item);
-  if (!client) {
-    note('Cookie alınamadı: tarayıcı eklentisi bağlı değil, cookie olmadan deneniyor');
-    return undefined;
-  }
+/**
+ * Fetches the cookies for one URL from the browser it is open in and writes them to
+ * `cookieDir/<fileId>.txt`. Never throws: without cookies yt-dlp still tries.
+ */
+async function prepareCookieFile(url: string, ctx: ProbeContext, fileId: string): Promise<{ file?: string; note?: string }> {
+  const decision = cookieDecision(url, settings.get());
+  if (!decision.send) return { note: decision.note };
+  const client = pickCookieClient(bridge.clients(), ctx);
+  if (!client) return { note: 'Cookie alınamadı: tarayıcı eklentisi bağlı değil, cookie olmadan deneniyor' };
   if (!client.canReadCookies) {
-    note('Eklenti cookie okuyamıyor (eklentiyi yeniden yükle veya site erişimine izin ver), cookie olmadan deneniyor');
-    return undefined;
+    return { note: 'Eklenti cookie okuyamıyor (eklentiyi yeniden yükle veya site erişimine izin ver), cookie olmadan deneniyor' };
   }
-  // Tab ids are per browser connection; only pass it when talking to the original one.
-  const res = await bridge.requestCookies(client.id, item.url, client.id === item.clientId ? item.tabId : undefined);
+  // Only use the tab's own cookie store when talking to the connection that reported the tab.
+  const res = await bridge.requestCookies(client.id, url, client.id === ctx.clientId ? ctx.tabId : undefined);
   if (!res || res.error) {
-    note(`Cookie alınamadı${res?.error ? `: ${res.error}` : ' (tarayıcı yanıt vermedi)'}, cookie olmadan deneniyor`);
-    return undefined;
+    return { note: `Cookie alınamadı${res?.error ? `: ${res.error}` : ' (tarayıcı yanıt vermedi)'}, cookie olmadan deneniyor` };
   }
-  if (!res.cookies.length) {
-    note(undefined);
-    return undefined;
+  if (!res.cookies.length) return {};
+  const file = await writeCookieFile(cookieDir, fileId, res.cookies);
+  return { file, note: `${res.cookies.length} cookie gönderildi (${client.browser})` };
+}
+
+const probes = new ProbeService({
+  run: (args) => spawnRunner(bin('yt-dlp'), args),
+  prepare: async (url, playlist, ctx) => {
+    const fileId = `probe-${randomUUID()}`;
+    const { file } = await prepareCookieFile(url, ctx, fileId);
+    return {
+      args: buildProbeArgs({ url, preset: settings.get().preset, denoPath: bin('deno'), playlist, cookiesFile: file }),
+      cleanup: () => deleteCookieFile(cookieDir, fileId),
+    };
+  },
+});
+
+async function probeWithHistory(url: string, ctx: ProbeContext, playlist = false): Promise<ProbeResult> {
+  if (!depsReady()) return { url, supported: false, isPlaylist: false, hasPlaylist: false, error: 'Önce gerekli paketler kurulmalı' };
+  const r = await probes.probe(url, ctx, playlist);
+  if (!r.supported || r.isPlaylist) return r;
+  const prev = await history.existing({ url, extractor: r.extractor, id: r.id });
+  return prev ? { ...r, alreadyDownloaded: prev.filepath } : r;
+}
+
+/**
+ * Single entry point for adding downloads (UI and browser extension). A URL that is a whole
+ * playlist must not go in as one item: yt-dlp would download every video under it.
+ */
+async function enqueue(entries: NewItem[]): Promise<{ added: number; playlists: string[] }> {
+  if (!depsReady()) throw new Error('Önce gerekli paketler kurulmalı');
+  const ok: NewItem[] = [];
+  const playlists: string[] = [];
+  for (const e of entries.filter((x) => isCandidateUrl(x.url))) {
+    // The tabs screen has usually checked the URL already; links sent from the browser haven't been.
+    const r = probes.cached(e.url) ?? (await probes.probe(e.url, e));
+    if (r.isPlaylist) playlists.push(e.url);
+    else ok.push({ ...e, title: r.title ?? e.title, extractor: e.extractor ?? r.extractor, videoId: e.videoId ?? r.id });
   }
-  const file = await writeCookieFile(cookieDir, item.id, res.cookies);
-  note(`${res.cookies.length} cookie gönderildi (${client.browser})`);
-  return file;
+  return { added: queue.add(ok).length, playlists };
 }
 
 async function refreshDeps(): Promise<DepStatus[]> {
@@ -169,9 +212,10 @@ const depsReady = () => depStatus.length > 0 && depStatus.every((d) => d.state =
 
 async function install(ids: DepId[]): Promise<DepStatus[]> {
   if (installing) throw new Error('Kurulum zaten sürüyor');
-  if (queue.isBusy()) throw new Error('İndirme sürerken bağımlılıklar güncellenemez (dosyalar kullanımda)');
+  if (queue.isBusy() || probes.activeCount() > 0) throw new Error('İndirme sürerken bağımlılıklar güncellenemez (dosyalar kullanımda)');
   installing = true;
   queue.setPaused(true);
+  probes.setBlocked(true);
   const errors: string[] = [];
   try {
     for (const def of defs.filter((d) => ids.includes(d.id))) {
@@ -189,6 +233,7 @@ async function install(ids: DepId[]): Promise<DepStatus[]> {
     }
   } finally {
     installing = false;
+    probes.setBlocked(false);
   }
   await refreshDeps(); // also unpauses the queue if everything is installed
   if (errors.length) throw new Error(errors.join('\n'));
@@ -211,7 +256,7 @@ async function runUpdateCheck(force = false): Promise<DepStatus[]> {
 
 /** Auto-updates wait until the queue is idle: Windows locks a running yt-dlp.exe. */
 async function applyPendingUpdates() {
-  if (!pendingAutoUpdates.size || queue.isBusy() || installing) return;
+  if (!pendingAutoUpdates.size || queue.isBusy() || probes.activeCount() > 0 || installing) return;
   const ids = [...pendingAutoUpdates];
   pendingAutoUpdates.clear();
   await install(ids).catch((err) => send('app:error', `Otomatik güncelleme başarısız: ${(err as Error).message}`));
@@ -236,10 +281,9 @@ function registerIpc() {
   });
 
   ipcMain.handle('queue:list', () => queue.list());
-  ipcMain.handle('queue:add', (_e, entries: { url: string; title: string; browser?: string; clientId?: string; tabId?: number }[]) => {
-    if (!depsReady()) throw new Error('Önce gerekli paketler kurulmalı');
-    return queue.add(entries.filter((e) => isCandidateUrl(e.url)));
-  });
+  ipcMain.handle('queue:add', (_e, entries: NewItem[]) => enqueue(entries));
+  ipcMain.handle('tabs:probe', (_e, url: string, ctx: ProbeContext) => probeWithHistory(url, ctx));
+  ipcMain.handle('tabs:playlist', (_e, url: string, ctx: ProbeContext) => probeWithHistory(url, ctx, true));
   ipcMain.handle('queue:cancel', (_e, id: string) => queue.cancel(id));
   ipcMain.handle('queue:pause', (_e, id: string) => queue.pause(id));
   ipcMain.handle('queue:resume', (_e, id: string) => queue.resume(id));

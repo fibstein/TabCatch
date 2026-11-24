@@ -112,6 +112,11 @@ export class Bridge extends EventEmitter {
     });
   }
 
+  replyEnqueue(clientId: string, requestId: string, ok: boolean, message: string) {
+    const conn = this.conns.get(clientId);
+    if (conn) this.send(conn.ws, { type: 'enqueueResult', requestId, ok, message });
+  }
+
   closeTab(clientId: string, tabId: number, url: string): boolean {
     const conn = this.conns.get(clientId);
     if (!conn) return false;
@@ -136,6 +141,9 @@ export class Bridge extends EventEmitter {
       else if (msg.type === 'hello') {
         conn.client = { id, browser: msg.browser, extensionVersion: msg.extensionVersion, canReadCookies: msg.canReadCookies };
         this.emit('clients', this.clients());
+      } else if (msg.type === 'enqueue') {
+        // Handled by main; it answers with replyEnqueue().
+        this.emit('enqueue', { clientId: id, requestId: msg.requestId, browser: msg.browser, items: msg.items });
       } else if (msg.type === 'cookies') {
         const resolve = this.pendingCookies.get(msg.requestId);
         if (resolve) {

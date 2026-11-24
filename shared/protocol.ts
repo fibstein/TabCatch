@@ -1,5 +1,7 @@
 // Messages exchanged between the bridge extension and the desktop app over WebSocket.
 
+import type { MediaCandidate } from './media';
+
 export const BRIDGE_HOST = '127.0.0.1';
 export const BRIDGE_PORT = 47863;
 
@@ -14,6 +16,8 @@ export interface TabInfo {
   url: string;
   title: string;
   favIconUrl?: string;
+  /** Video URLs the page loaded (HLS/DASH manifests, video files), best first. */
+  media?: MediaCandidate[];
 }
 
 /** Subset of chrome.cookies.Cookie needed for a Netscape cookies.txt file. */
@@ -136,6 +140,7 @@ export function parseExtMessage(raw: string): ExtToApp | null {
           url: tab.url,
           title: typeof tab.title === 'string' ? tab.title : tab.url,
           favIconUrl: typeof tab.favIconUrl === 'string' ? tab.favIconUrl : undefined,
+          media: parseMedia(tab.media),
         });
       }
       return { type: 'tabs', requestId: m.requestId, browser: asBrowser(m.browser), tabs };
@@ -143,6 +148,25 @@ export function parseExtMessage(raw: string): ExtToApp | null {
     default:
       return null;
   }
+}
+
+function parseMedia(v: unknown): MediaCandidate[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: MediaCandidate[] = [];
+  for (const m of v.slice(0, 20)) {
+    if (!m || typeof m !== 'object') continue;
+    const r = m as Record<string, unknown>;
+    if (typeof r.url !== 'string' || !/^https?:/.test(r.url)) continue;
+    if (r.kind !== 'hls' && r.kind !== 'dash' && r.kind !== 'file') continue;
+    out.push({
+      url: r.url,
+      kind: r.kind,
+      contentType: typeof r.contentType === 'string' ? r.contentType : undefined,
+      size: typeof r.size === 'number' ? r.size : undefined,
+      seenAt: typeof r.seenAt === 'number' ? r.seenAt : 0,
+    });
+  }
+  return out.length ? out : undefined;
 }
 
 function asBrowser(v: unknown): BrowserName {

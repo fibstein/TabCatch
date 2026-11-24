@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg, type BrowserTabs, type NewItem, type ProbeResult } from './api';
 import { formatBytes } from './SetupView';
+import type { MediaCandidate } from '../../../shared/media';
+
+const KIND_LABEL: Record<MediaCandidate['kind'], string> = { hls: 'HLS', dash: 'DASH', file: 'Dosya' };
+
+function shortUrl(u: string): string {
+  try {
+    const x = new URL(u);
+    const file = x.pathname.split('/').filter(Boolean).pop() ?? '';
+    return `${x.hostname} … /${file}`;
+  } catch {
+    return u;
+  }
+}
 
 const BROWSER_LABEL: Record<string, string> = { chrome: 'Chrome', edge: 'Edge', opera: 'Opera', unknown: 'Tarayıcı' };
 
@@ -43,6 +56,7 @@ export function TabsView({ onQueued, onError }: { onQueued: () => void; onError:
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [probes, setProbes] = useState<Record<string, ProbeState>>({});
   const [playlists, setPlaylists] = useState<Record<string, ProbeState>>({});
+  const [openStreams, setOpenStreams] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
 
   const key = (g: BrowserTabs, tabId: number) => `${g.clientId}:${tabId}`;
@@ -54,6 +68,7 @@ export function TabsView({ onQueued, onError }: { onQueued: () => void; onError:
       setGroups(gs);
       setSelected(new Set());
       setPlaylists({});
+      setOpenStreams(new Set());
       const initial: Record<string, ProbeState> = {};
       for (const g of gs) for (const t of g.tabs) initial[key(g, t.tabId)] = 'loading';
       setProbes(initial);
@@ -112,6 +127,11 @@ export function TabsView({ onQueued, onError }: { onQueued: () => void; onError:
         if (selected.has(k)) {
           entries.push({ url: t.url, title: info?.title ?? t.title, browser: g.browser, clientId: g.clientId, tabId: t.tabId, extractor: info?.extractor, videoId: info?.id });
         }
+        for (const m of t.media ?? []) {
+          if (selected.has(`${k}~${m.url}`)) {
+            entries.push({ url: m.url, title: info?.title ?? t.title, pageUrl: t.url, browser: g.browser, clientId: g.clientId, tabId: t.tabId });
+          }
+        }
         const pl = playlists[k];
         if (pl && pl !== 'loading') {
           for (const e of pl.entries ?? []) {
@@ -159,6 +179,10 @@ export function TabsView({ onQueued, onError }: { onQueued: () => void; onError:
               const pl = playlists[k];
               const canSelect = selectable(p);
               const showPlaylistBtn = p && p !== 'loading' && (p.isPlaylist || p.hasPlaylist) && !pl;
+              const media = t.media ?? [];
+              const unsupported = p !== undefined && p !== 'loading' && !p.supported;
+              // When yt-dlp doesn't know the page, the captured streams are the way to get the video.
+              const streamsOpen = openStreams.has(k) || (unsupported && media.length > 0);
               return (
                 <li key={k} className="tab-block">
                   <div
@@ -172,6 +196,22 @@ export function TabsView({ onQueued, onError }: { onQueued: () => void; onError:
                       <div className="muted small ellipsis">{t.url}</div>
                       <ProbeInfo p={p} />
                     </div>
+                    {media.length > 0 && !(unsupported && media.length > 0) && (
+                      <button
+                        className="small"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setOpenStreams((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(k)) next.delete(k);
+                            else next.add(k);
+                            return next;
+                          });
+                        }}
+                      >
+                        Yakalanan akışlar ({media.length})
+                      </button>
+                    )}
                     {showPlaylistBtn && (
                       <button
                         className="small"
@@ -184,6 +224,30 @@ export function TabsView({ onQueued, onError }: { onQueued: () => void; onError:
                       </button>
                     )}
                   </div>
+                  {streamsOpen && media.length > 0 && (
+                    <div className="playlist">
+                      <div className="small muted">
+                        {unsupported
+                          ? 'yt-dlp bu sayfayı tanımadı, ama sayfa şu videoları yükledi. Genelde ilk HLS/DASH akışı asıl videodur:'
+                          : 'Sayfanın yüklediği video adresleri. Sayfanın kendisi tercih edilir; bunları sadece o işe yaramazsa kullan:'}
+                      </div>
+                      <ul className="tabs">
+                        {media.map((m) => {
+                          const mk = `${k}~${m.url}`;
+                          return (
+                            <li key={mk} className={`tab-row ${selected.has(mk) ? 'selected' : ''}`} onClick={() => toggle(mk)} title={m.url}>
+                              <input type="checkbox" checked={selected.has(mk)} readOnly />
+                              <span className="tag">{KIND_LABEL[m.kind]}</span>
+                              <div className="tab-text">
+                                <div className="ellipsis small mono">{shortUrl(m.url)}</div>
+                                {m.size ? <div className="muted small">{formatBytes(m.size)}</div> : null}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
                   {pl === 'loading' && <div className="playlist muted small">Playlist yükleniyor…</div>}
                   {pl && pl !== 'loading' && pl.entries && (
                     <div className="playlist">

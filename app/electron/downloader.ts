@@ -42,6 +42,8 @@ export interface QueueItem {
   /** From the pre-check, when known: lets the history recognise the video under another URL. */
   extractor?: string;
   videoId?: string;
+  /** Set for a stream captured from the page's network traffic: the page it was playing on. */
+  pageUrl?: string;
   log: string[];
   addedAt: number;
 }
@@ -154,6 +156,7 @@ export class DownloadQueue extends EventEmitter {
         force: e.force,
         extractor: e.extractor,
         videoId: e.videoId,
+        pageUrl: e.pageUrl,
         id: randomUUID(),
         url: e.url,
         title: e.title,
@@ -409,7 +412,10 @@ export class DownloadQueue extends EventEmitter {
 
 function lastError(log: string[]): string | undefined {
   for (let i = log.length - 1; i >= 0; i--) {
-    if (log[i].startsWith('ERROR:')) return log[i].slice(6).trim();
+    if (!log[i].startsWith('ERROR:')) continue;
+    const msg = log[i].slice(6).trim();
+    if (/DRM/i.test(msg)) return 'DRM korumalı içerik, indirilemez';
+    return msg;
   }
   return undefined;
 }
@@ -423,6 +429,7 @@ export interface NewItem {
   force?: boolean;
   extractor?: string;
   videoId?: string;
+  pageUrl?: string;
 }
 
 interface Current {

@@ -1,3 +1,5 @@
+import { safeTitle } from '../../shared/media';
+
 export type FormatPreset = 'compat' | 'compat1080' | 'best' | 'audio';
 
 export interface YtDlpArgsOptions {
@@ -11,10 +13,25 @@ export interface YtDlpArgsOptions {
   cookiesFile?: string;
   /** >1 when the default file name is taken by another video. */
   outputSuffix?: number;
+  /**
+   * Page the stream was captured on: sent as Referer/Origin (many CDNs refuse requests without
+   * them) and its title names the file, since a bare manifest URL has no useful title.
+   */
+  page?: { url: string; title: string };
 }
 
-export function outputTemplate(suffix?: number): string {
-  return suffix && suffix > 1 ? `%(title).150B [%(id)s] (${suffix}).%(ext)s` : '%(title).150B [%(id)s].%(ext)s';
+export function outputTemplate(suffix?: number, fixedTitle?: string): string {
+  const name = fixedTitle ? safeTitle(fixedTitle) : '%(title).150B';
+  return suffix && suffix > 1 ? `${name} [%(id)s] (${suffix}).%(ext)s` : `${name} [%(id)s].%(ext)s`;
+}
+
+export function pageHeaders(pageUrl: string): string[] {
+  try {
+    const origin = new URL(pageUrl).origin;
+    return ['--add-headers', `Referer:${pageUrl}`, '--add-headers', `Origin:${origin}`];
+  } catch {
+    return [];
+  }
 }
 
 export const PROGRESS_PREFIX = 'TABCATCH_PROGRESS ';
@@ -67,11 +84,12 @@ export function buildYtDlpArgs(o: YtDlpArgsOptions): string[] {
     '-P',
     o.outputDir,
     '-o',
-    outputTemplate(o.outputSuffix),
+    outputTemplate(o.outputSuffix, o.page?.title),
     ...presetArgs(o.preset),
   ];
   if (o.fresh) args.push('--no-continue', '--force-overwrites');
   if (o.cookiesFile) args.push('--cookies', o.cookiesFile);
+  if (o.page) args.push(...pageHeaders(o.page.url));
   args.push('--', o.url);
   return args;
 }

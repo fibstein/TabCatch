@@ -7,6 +7,7 @@ import {
   type ExtToApp,
   type TabInfo,
 } from '../../shared/protocol';
+import { mediaForTab, startSniffer } from './sniffer';
 
 const URL_ = `ws://${BRIDGE_HOST}:${BRIDGE_PORT}`;
 // Chrome 116+ keeps the service worker alive while WebSocket traffic happens at least every 30 s.
@@ -35,16 +36,20 @@ function send(msg: ExtToApp) {
 }
 
 async function collectTabs(): Promise<TabInfo[]> {
-  const tabs = await chrome.tabs.query({});
-  return tabs
-    .filter((t) => typeof t.url === 'string' && t.url.length > 0)
-    .map((t) => ({
-      tabId: t.id ?? 0,
-      windowId: t.windowId,
-      url: t.url!,
-      title: t.title ?? t.url!,
-      favIconUrl: t.favIconUrl,
-    }));
+  const tabs = (await chrome.tabs.query({})).filter((t) => typeof t.url === 'string' && t.url.length > 0);
+  return Promise.all(
+    tabs.map(async (t) => {
+      const media = t.id !== undefined ? await mediaForTab(t.id) : [];
+      return {
+        tabId: t.id ?? 0,
+        windowId: t.windowId,
+        url: t.url!,
+        title: t.title ?? t.url!,
+        favIconUrl: t.favIconUrl,
+        media: media.length ? media : undefined,
+      };
+    }),
+  );
 }
 
 /** Users can withdraw site access in Edge/Opera; without it cookies.getAll returns nothing. */
@@ -197,6 +202,7 @@ chrome.action.onClicked.addListener((tab) => {
   sendToApp([{ url: tab.url, title: tab.title ?? tab.url, tabId: tab.id }], tab.id);
 });
 
+startSniffer();
 chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === RECONNECT_ALARM) connect();

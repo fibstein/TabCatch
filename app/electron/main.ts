@@ -57,7 +57,7 @@ const queue = new DownloadQueue({
   runner: (args) => spawnRunner(bin('yt-dlp'), args),
   buildArgs: async (item) => {
     const s = settings.get();
-    const { file: cookiesFile, note } = await prepareCookieFile(item.url, item, item.id);
+    const { file: cookiesFile, note } = await prepareCookieFile(item.url, item, item.id, item.pageUrl);
     item.cookieNote = note;
     if (note) item.log.push(`[cookie] ${note}`);
     return buildYtDlpArgs({
@@ -69,6 +69,7 @@ const queue = new DownloadQueue({
       fresh: item.fresh,
       cookiesFile,
       outputSuffix: item.outputSuffix,
+      page: item.pageUrl ? { url: item.pageUrl, title: item.title } : undefined,
     });
   },
   findExisting: async (item) => {
@@ -145,8 +146,14 @@ bridge.on(
  * Fetches the cookies for one URL from the browser it is open in and writes them to
  * `cookieDir/<fileId>.txt`. Never throws: without cookies yt-dlp still tries.
  */
-async function prepareCookieFile(url: string, ctx: ProbeContext, fileId: string): Promise<{ file?: string; note?: string }> {
-  const decision = cookieDecision(url, settings.get());
+async function prepareCookieFile(
+  url: string,
+  ctx: ProbeContext,
+  fileId: string,
+  /** Page a captured stream came from: its login cookies often guard the stream too. */
+  pageUrl?: string,
+): Promise<{ file?: string; note?: string }> {
+  const decision = cookieDecision(pageUrl ?? url, settings.get());
   if (!decision.send) return { note: decision.note };
   const client = pickCookieClient(bridge.clients(), ctx);
   if (!client) return { note: 'Cookie alınamadı: tarayıcı eklentisi bağlı değil, cookie olmadan deneniyor' };
@@ -154,13 +161,21 @@ async function prepareCookieFile(url: string, ctx: ProbeContext, fileId: string)
     return { note: 'Eklenti cookie okuyamıyor (eklentiyi yeniden yükle veya site erişimine izin ver), cookie olmadan deneniyor' };
   }
   // Only use the tab's own cookie store when talking to the connection that reported the tab.
-  const res = await bridge.requestCookies(client.id, url, client.id === ctx.clientId ? ctx.tabId : undefined);
+  const tabId = client.id === ctx.clientId ? ctx.tabId : undefined;
+  const urls = pageUrl && pageUrl !== url ? [url, pageUrl] : [url];
+  const results = await Promise.all(urls.map((u) => bridge.requestCookies(client.id, u, tabId)));
+  const res = results[0];
   if (!res || res.error) {
     return { note: `Cookie alınamadı${res?.error ? `: ${res.error}` : ' (tarayıcı yanıt vermedi)'}, cookie olmadan deneniyor` };
   }
-  if (!res.cookies.length) return {};
-  const file = await writeCookieFile(cookieDir, fileId, res.cookies);
-  return { file, note: `${res.cookies.length} cookie gönderildi (${client.browser})` };
+  const seen = new Set<string>();
+  const cookies = results.flatMap((r) => r?.cookies ?? []).filter((c) => {
+    const k = `${c.domain}|${c.path}|${c.name}`;
+    return seen.has(k) ? false : (seen.add(k), true);
+  });
+  if (!cookies.length) return {};
+  const file = await writeCookieFile(cookieDir, fileId, cookies);
+  return { file, note: `${cookies.length} cookie gönderildi (${client.browser})` };
 }
 
 const probes = new ProbeService({
@@ -192,6 +207,12 @@ async function enqueue(entries: NewItem[]): Promise<{ added: number; playlists: 
   const ok: NewItem[] = [];
   const playlists: string[] = [];
   for (const e of entries.filter((x) => isCandidateUrl(x.url))) {
+    // A captured stream is a media URL already; checking it without the page's Referer would
+    // only produce a 403 on protected CDNs.
+    if (e.pageUrl) {
+      ok.push(e);
+      continue;
+    }
     // The tabs screen has usually checked the URL already; links sent from the browser haven't been.
     const r = probes.cached(e.url) ?? (await probes.probe(e.url, e));
     if (r.isPlaylist) playlists.push(e.url);

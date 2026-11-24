@@ -34,6 +34,8 @@
     },
     "files": [
       "dist/**",
+      "assets/**",
+      "build/icon.png",
       "package.json"
     ],
     "extraResources": [
@@ -43,7 +45,8 @@
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,

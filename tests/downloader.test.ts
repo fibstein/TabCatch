@@ -254,4 +254,18 @@ describe('DownloadQueue', () => {
     expect(runs).toHaveLength(1);
     expect(q.get(item.id)!.status).toBe('done');
   });
+
+  it('a section turns a skipped item back into a download', async () => {
+    const { q, runs } = setup(undefined, undefined, { findExisting: async (item) => (item.section ? null : '/out/a.mp4') });
+    const [a] = q.add([{ url: 'a', title: 'A' }]);
+    await tick();
+    await tick();
+    expect(q.get(a.id)!.status).toBe('skipped');
+    expect(q.setSection(a.id, { start: 60, end: 120 })).toBe(true);
+    await tick();
+    await tick();
+    expect(q.get(a.id)).toMatchObject({ status: 'downloading', section: { start: 60, end: 120 } });
+    expect(runs).toHaveLength(1);
+    expect(q.setSection(a.id, undefined)).toBe(false); // running: can't change any more
+  });
 });

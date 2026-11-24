@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, errMsg, type QueueItem } from './api';
 import { formatBytes } from './SetupView';
+import { formatDuration } from './TabsView';
 
 const STATUS: Record<QueueItem['status'], string> = {
   queued: 'Sırada',
@@ -22,6 +23,7 @@ function eta(s: number | null): string {
 
 function Item({ item, onError }: { item: QueueItem; onError: (m: string) => void }) {
   const [log, setLog] = useState<string | null>(null);
+  const [sectionText, setSectionText] = useState<string | null>(null);
   const [repairing, setRepairing] = useState(false);
   const p = item.progress;
   const q = api().queue;
@@ -63,6 +65,36 @@ function Item({ item, onError }: { item: QueueItem; onError: (m: string) => void
         </div>
       )}
 
+      {item.section && sectionText === null && (
+        <div className="small">
+          Bölüm: {formatDuration(item.section.start) || '0:00'} – {formatDuration(item.section.end)}
+        </div>
+      )}
+      {sectionText !== null && (
+        <div className="row small">
+          <input
+            className="section-input"
+            placeholder="10:00-15:30"
+            value={sectionText}
+            autoFocus
+            onChange={(e) => setSectionText(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          />
+          <button
+            className="small"
+            onClick={wrap(async () => {
+              await q.setSection(item.id, sectionText);
+              setSectionText(null);
+            })}
+          >
+            Kaydet
+          </button>
+          <button className="small" onClick={() => setSectionText(null)}>
+            Vazgeç
+          </button>
+          <span className="muted">Boş bırakırsan videonun tamamı iner. Kesim noktaları yeniden encode edildiği için biraz yavaştır.</span>
+        </div>
+      )}
       {item.cookieNote && <div className="small muted">{item.cookieNote}</div>}
       {item.verify && (
         <div className="small muted mono">
@@ -82,6 +114,15 @@ function Item({ item, onError }: { item: QueueItem; onError: (m: string) => void
       <div className="actions small">
         {(item.status === 'queued' || item.status === 'downloading') && <button onClick={wrap(() => q.pause(item.id))}>Duraklat</button>}
         {item.status === 'paused' && <button onClick={wrap(() => q.resume(item.id))}>Devam et</button>}
+        {['queued', 'paused', 'error', 'canceled', 'skipped'].includes(item.status) && sectionText === null && (
+          <button
+            onClick={() =>
+              setSectionText(item.section ? `${formatDuration(item.section.start) || '0:00'}-${formatDuration(item.section.end)}` : '')
+            }
+          >
+            {item.section ? 'Bölümü değiştir' : 'Sadece bir bölüm'}
+          </button>
+        )}
         {item.status === 'skipped' && <button onClick={wrap(() => q.force(item.id))}>Yine de indir</button>}
         {(item.status === 'queued' || item.status === 'downloading' || item.status === 'paused') && (
           <button onClick={wrap(() => q.cancel(item.id))}>İptal</button>

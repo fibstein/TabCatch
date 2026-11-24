@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { mkdir, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { sectionTag, type Section } from './ytdlp';
 
 export interface HistoryEntry {
   key: string;
@@ -9,8 +10,11 @@ export interface HistoryEntry {
   id?: string;
   filepath: string;
   size?: number;
+  section?: Section;
   finishedAt: number;
 }
+
+type Identity = { url: string; extractor?: string; id?: string; section?: Section };
 
 /** Same URL regardless of fragment / trailing slash / host case. */
 export function normalizeUrl(url: string): string {
@@ -31,10 +35,11 @@ export function normalizeUrl(url: string): string {
  * derives the id from the file name ("index", "video"), so different videos share it; there the
  * URL is the only reliable identity. (This is also why yt-dlp's --download-archive isn't used.)
  */
-export function historyKey(v: { url: string; extractor?: string; id?: string }): string {
+export function historyKey(v: Identity): string {
   const ex = v.extractor?.toLowerCase();
-  if (ex && v.id && ex !== 'generic') return `${ex}:${v.id}`;
-  return `url:${normalizeUrl(v.url)}`;
+  const base = ex && v.id && ex !== 'generic' ? `${ex}:${v.id}` : `url:${normalizeUrl(v.url)}`;
+  // A cut-out part is a different file from the full video (and from other parts).
+  return v.section ? `${base}#${sectionTag(v.section)}` : base;
 }
 
 const MAX_ENTRIES = 5000;
@@ -58,9 +63,10 @@ export class History {
     return this.entries.find((e) => e.key === key);
   }
 
-  findByUrl(url: string): HistoryEntry | undefined {
+  findByUrl(url: string, section?: Section): HistoryEntry | undefined {
     const n = normalizeUrl(url);
-    return this.entries.find((e) => normalizeUrl(e.url) === n);
+    const tag = section ? sectionTag(section) : undefined;
+    return this.entries.find((e) => normalizeUrl(e.url) === n && (e.section ? sectionTag(e.section) : undefined) === tag);
   }
 
   findByPath(filepath: string): HistoryEntry | undefined {
@@ -69,8 +75,8 @@ export class History {
   }
 
   /** An earlier download of this item whose file still exists. */
-  async existing(v: { url: string; extractor?: string; id?: string }): Promise<HistoryEntry | null> {
-    const hit = (v.extractor && v.id ? this.findByKey(historyKey(v)) : undefined) ?? this.findByUrl(v.url);
+  async existing(v: Identity): Promise<HistoryEntry | null> {
+    const hit = (v.extractor && v.id ? this.findByKey(historyKey(v)) : undefined) ?? this.findByUrl(v.url, v.section);
     if (!hit) return null;
     try {
       await stat(hit.filepath);

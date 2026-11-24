@@ -29,6 +29,7 @@ const api = {
     force: (id: string) => invoke('queue:force', id),
     setPaused: (paused: boolean) => invoke('queue:setPaused', paused),
     isPaused: () => invoke('queue:isPaused'),
+    setSection: (id: string, text: string | null) => invoke('queue:setSection', id, text),
     retry: (id: string) => invoke('queue:retry', id),
     remove: (id: string) => invoke('queue:remove', id),
     log: (id: string) => invoke('queue:log', id),

@@ -3,8 +3,15 @@ import { rename, rm, stat } from 'node:fs/promises';
 import { dirname, extname, basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
+export interface ProbeStream {
+  index?: number;
+  codec_type?: string;
+  codec_name?: string;
+  disposition?: { attached_pic?: number };
+}
+
 export interface ProbeJson {
-  streams?: { codec_type?: string; codec_name?: string }[];
+  streams?: ProbeStream[];
   format?: { duration?: string; format_name?: string };
 }
 
@@ -14,6 +21,9 @@ export interface VerifyResult {
   actualDuration: number | null;
   videoCodec?: string;
   audioCodec?: string;
+  /** ffprobe stream indexes of the real video/audio (not cover art or subtitles). */
+  videoIndex?: number;
+  audioIndex?: number;
 }
 
 export interface VerifyExpectations {
@@ -33,7 +43,10 @@ export function durationMatches(actual: number, expected: number): boolean {
 export function evaluateProbe(probe: ProbeJson, exp: VerifyExpectations): VerifyResult {
   const problems: string[] = [];
   const streams = probe.streams ?? [];
-  const video = streams.find((s) => s.codec_type === 'video' && s.codec_name !== 'mjpeg' && s.codec_name !== 'png');
+  // Embedded cover art is a one-frame "video" stream; it must not count as the video.
+  const video = streams.find(
+    (s) => s.codec_type === 'video' && s.disposition?.attached_pic !== 1 && s.codec_name !== 'mjpeg' && s.codec_name !== 'png',
+  );
   const audio = streams.find((s) => s.codec_type === 'audio');
   if (exp.expectVideo && !video) problems.push('Video stream yok');
   if (exp.expectAudio && !audio) problems.push('Ses stream yok');
@@ -43,7 +56,15 @@ export function evaluateProbe(probe: ProbeJson, exp: VerifyExpectations): Verify
   else if (exp.duration && !durationMatches(actualDuration, exp.duration)) {
     problems.push(`Süre uyuşmuyor: dosya ${actualDuration.toFixed(1)} sn, beklenen ${exp.duration.toFixed(1)} sn`);
   }
-  return { ok: problems.length === 0, problems, actualDuration, videoCodec: video?.codec_name, audioCodec: audio?.codec_name };
+  return {
+    ok: problems.length === 0,
+    problems,
+    actualDuration,
+    videoCodec: video?.codec_name,
+    audioCodec: audio?.codec_name,
+    videoIndex: video?.index,
+    audioIndex: audio?.index,
+  };
 }
 
 function run(file: string, args: string[], timeout = 0): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -85,7 +106,7 @@ export function detectGaps(dts: number[], threshold = 2): TimestampGap[] {
 }
 
 /** Reads packet timestamps without decoding (I/O bound: seconds even for long videos). */
-export function readPacketTimes(ffprobe: string, file: string, stream: 'v:0' | 'a:0'): Promise<number[]> {
+export function readPacketTimes(ffprobe: string, file: string, stream: string): Promise<number[]> {
   return new Promise((resolve, reject) => {
     const child = spawn(ffprobe, ['-v', 'error', '-select_streams', stream, '-show_entries', 'packet=dts_time', '-of', 'csv=p=0', file], {
       windowsHide: true,
@@ -113,9 +134,10 @@ export async function verifyFile(ffprobe: string, file: string, exp: VerifyExpec
   const probe = await probeFile(ffprobe, file);
   if (!probe) return { ok: false, problems: ['ffprobe dosyayı açamadı'], actualDuration: null };
   const result = evaluateProbe(probe, exp);
-  const streams: ['v:0' | 'a:0', string, boolean][] = [
-    ['v:0', 'Görüntü', exp.expectVideo && !!result.videoCodec],
-    ['a:0', 'Ses', exp.expectAudio && !!result.audioCodec],
+  // Select by absolute index: "v:0" could be the cover art, which has a single packet.
+  const streams: [string, string, boolean][] = [
+    [String(result.videoIndex ?? 'v:0'), 'Görüntü', exp.expectVideo && !!result.videoCodec],
+    [String(result.audioIndex ?? 'a:0'), 'Ses', exp.expectAudio && !!result.audioCodec],
   ];
   for (const [sel, label, present] of streams) {
     if (!present) continue;

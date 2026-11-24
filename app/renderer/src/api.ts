@@ -31,6 +31,7 @@ export interface TabCatchApi {
     force(id: string): Promise<void>;
     setPaused(paused: boolean): Promise<void>;
     isPaused(): Promise<boolean>;
+    setSection(id: string, text: string | null): Promise<void>;
     retry(id: string): Promise<void>;
     remove(id: string): Promise<void>;
     log(id: string): Promise<string>;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, nativeImage, Notification, shell, Tray } from 'electron';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { spawnRunner } from './runner';
 import { defaultSettings, SettingsStore, type Settings } from './settings';
 import { deepCheck, repairFile, verifyFile, type RepairMode, type VerifyExpectations } from './verify';
-import { buildYtDlpArgs } from './ytdlp';
+import { buildYtDlpArgs, parseSection } from './ytdlp';
 import { cookieDecision, deleteCookieFile, pickCookieClient, writeCookieFile } from './cookies';
 import { History, historyKey } from './history';
 import { loadQueue, QueueSaver } from './queueStore';
@@ -40,6 +40,12 @@ const bridge = new Bridge(BRIDGE_PORT, () => settings.allowedExtensionIds());
 const history = new History(join(userData, 'history.json'));
 const queueSaver = new QueueSaver(join(userData, 'queue.json'));
 let quitting = false;
+let cleanedUp = false;
+let tray: Tray | null = null;
+let trayHintShown = false;
+const startHidden = process.argv.includes('--hidden');
+/** Results since the queue last went idle, for the "finished" notification. */
+const runStats = { done: 0, failed: 0 };
 
 let win: BrowserWindow | null = null;
 let depStatus: DepStatus[] = [];
@@ -50,7 +56,9 @@ const send = (channel: string, payload: unknown) => win?.webContents.send(channe
 
 function expectations(item: QueueItem, duration: number | null): VerifyExpectations {
   const audioOnly = settings.get().preset === 'audio';
-  return { duration, expectVideo: !audioOnly, expectAudio: true };
+  // yt-dlp reports the whole video's duration; a cut-out part is only as long as the range.
+  const expected = item.section ? Math.min(item.section.end, duration ?? item.section.end) - item.section.start : duration;
+  return { duration: expected, expectVideo: !audioOnly, expectAudio: true };
 }
 
 const queue = new DownloadQueue({
@@ -70,16 +78,26 @@ const queue = new DownloadQueue({
       cookiesFile,
       outputSuffix: item.outputSuffix,
       page: item.pageUrl ? { url: item.pageUrl, title: item.title } : undefined,
+      section: item.section,
+      rateLimitMBps: s.rateLimitMBps,
+      embed: {
+        metadata: s.embedMetadata,
+        thumbnail: s.embedThumbnail,
+        chapters: s.embedChapters,
+        subtitles: s.subtitles,
+        subLangs: s.subLangs,
+        autoSubtitles: s.autoSubtitles,
+      },
     });
   },
   findExisting: async (item) => {
     if (!settings.get().skipDownloaded) return null;
-    return (await history.existing({ url: item.url, extractor: item.extractor, id: item.videoId }))?.filepath ?? null;
+    return (await history.existing({ url: item.url, extractor: item.extractor, id: item.videoId, section: item.section }))?.filepath ?? null;
   },
   isNameCollision: async (item, result) => {
     const owner = history.findByPath(result.filepath);
     if (!owner) return false; // not ours (e.g. downloaded by hand earlier): keep yt-dlp's behaviour
-    return owner.key !== historyKey({ url: item.url, extractor: result.extractor, id: result.id });
+    return owner.key !== historyKey({ url: item.url, extractor: result.extractor, id: result.id, section: item.section });
   },
   afterRun: (item) => deleteCookieFile(cookieDir, item.id),
   verify: async (item, result) => {
@@ -98,6 +116,8 @@ const queue = new DownloadQueue({
     );
     if (item.status === 'done' && item.result) void recordHistory(item);
     if ((item.status === 'done' || item.status === 'skipped') && settings.get().closeTabAfterDownload) closeSourceTab(item);
+    if (item.status === 'done') runStats.done++;
+    else if (item.status === 'error' || item.status === 'verify_failed') runStats.failed++;
   },
 });
 // Nothing starts until the dependencies are confirmed installed (see refreshDeps).
@@ -106,7 +126,7 @@ queue.setPaused(true);
 async function recordHistory(item: QueueItem) {
   const r = item.result!;
   const size = await stat(r.filepath).then((s) => s.size).catch(() => undefined);
-  await history.add({ url: item.url, extractor: r.extractor, id: r.id, filepath: r.filepath, size }).catch(() => undefined);
+  await history.add({ url: item.url, extractor: r.extractor, id: r.id, filepath: r.filepath, size, section: item.section }).catch(() => undefined);
 }
 
 function closeSourceTab(item: QueueItem) {
@@ -123,8 +143,66 @@ const saveQueue = () => {
 queue.on('update', (items) => {
   send('queue:update', items);
   saveQueue();
+  updateTrayMenu();
 });
-queue.on('idle', () => void applyPendingUpdates());
+queue.on('idle', () => {
+  notifyFinished();
+  void applyPendingUpdates();
+});
+
+function notifyFinished() {
+  const { done, failed } = runStats;
+  if (!done && !failed) return;
+  runStats.done = 0;
+  runStats.failed = 0;
+  if (!settings.get().notifications || !Notification.isSupported()) return;
+  const parts = [done ? `${done} video indirildi` : '', failed ? `${failed} hata` : ''].filter(Boolean);
+  const n = new Notification({ title: 'TabCatch: kuyruk bitti', body: parts.join(', '), icon: assetPath('tray@2x.png') });
+  n.on('click', showWindow);
+  n.show();
+}
+
+function assetPath(name: string): string {
+  return join(app.getAppPath(), 'assets', name);
+}
+
+function showWindow() {
+  if (!win) createWindow();
+  else {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  const paused = queue.isUserPaused();
+  const active = queue.list().filter((i) => i.status === 'downloading' || i.status === 'queued').length;
+  tray.setToolTip(active ? `TabCatch: ${active} video sırada` : 'TabCatch');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'TabCatch\'i aç', click: showWindow },
+      { label: paused ? 'Kuyruğu sürdür' : 'Kuyruğu duraklat', click: () => queue.setUserPaused(!paused) },
+      { type: 'separator' },
+      { label: 'Çıkış', click: () => app.quit() },
+    ]),
+  );
+}
+
+function createTray() {
+  if (tray) return;
+  const icon = nativeImage.createFromPath(assetPath('tray.png'));
+  icon.addRepresentation({ scaleFactor: 2, buffer: nativeImage.createFromPath(assetPath('tray@2x.png')).toPNG() });
+  tray = new Tray(icon);
+  tray.on('click', showWindow);
+  updateTrayMenu();
+}
+
+function applyLoginItem() {
+  if (process.platform !== 'win32' && process.platform !== 'darwin') return;
+  app.setLoginItemSettings({ openAtLogin: settings.get().startAtLogin, args: ['--hidden'] });
+}
 bridge.on('clients', (clients) => send('bridge:clients', clients));
 bridge.on(
   'enqueue',
@@ -311,6 +389,11 @@ function registerIpc() {
   ipcMain.handle('queue:force', (_e, id: string) => queue.forceDownload(id));
   ipcMain.handle('queue:setPaused', (_e, paused: boolean) => queue.setUserPaused(paused));
   ipcMain.handle('queue:isPaused', () => queue.isUserPaused());
+  ipcMain.handle('queue:setSection', (_e, id: string, text: string | null) => {
+    const section = text?.trim() ? parseSection(text) : undefined;
+    if (section === null) throw new Error('Bölüm biçimi: 10:00-15:30 veya 1:02:00-1:10:00');
+    if (!queue.setSection(id, section)) throw new Error('Bölüm sadece başlamamış öğelerde değiştirilebilir');
+  });
   ipcMain.handle('queue:retry', (_e, id: string) => queue.retry(id));
   ipcMain.handle('queue:remove', (_e, id: string) => queue.remove(id));
   ipcMain.handle('queue:log', (_e, id: string) => queue.get(id)?.log.join('\n') ?? '');
@@ -344,7 +427,11 @@ function registerIpc() {
   });
 
   ipcMain.handle('settings:get', () => settings.get());
-  ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => settings.set(patch));
+  ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
+    const next = await settings.set(patch);
+    if ('startAtLogin' in patch) applyLoginItem();
+    return next;
+  });
   ipcMain.handle('settings:chooseFolder', async () => {
     const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory', 'createDirectory'], defaultPath: settings.get().outputDir });
     if (r.canceled || !r.filePaths[0]) return settings.get();
@@ -360,6 +447,8 @@ function createWindow() {
     minWidth: 760,
     minHeight: 520,
     title: 'TabCatch',
+    icon: join(app.getAppPath(), 'build', 'icon.png'),
+    show: !startHidden,
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
@@ -368,6 +457,17 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  win.on('close', (e) => {
+    // Closing the window keeps downloads running in the tray; "Çıkış" in the tray menu quits.
+    if (!quitting && settings.get().minimizeToTray && tray) {
+      e.preventDefault();
+      win?.hide();
+      if (!trayHintShown && Notification.isSupported()) {
+        trayHintShown = true;
+        new Notification({ title: 'TabCatch arka planda çalışıyor', body: 'Kapatmak için sistem tepsisindeki ikondan "Çıkış"ı seç.' }).show();
+      }
+    }
+  });
   win.on('closed', () => (win = null));
   void win.loadFile(join(__dirname, '..', 'renderer', 'index.html'));
 }
@@ -375,12 +475,9 @@ function createWindow() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
-  });
+  // Windows shows notifications only for apps with an AppUserModelID.
+  app.setAppUserModelId('com.tabcatch.app');
+  app.on('second-instance', showWindow);
 
   app.whenReady().then(async () => {
     await rm(cookieDir, { recursive: true, force: true });
@@ -388,6 +485,8 @@ if (!app.requestSingleInstanceLock()) {
     if (saved) queue.restore(saved.items, saved.userPaused);
     registerIpc();
     createWindow();
+    createTray();
+    applyLoginItem();
     try {
       await bridge.start();
     } catch (err) {
@@ -397,16 +496,25 @@ if (!app.requestSingleInstanceLock()) {
     if (depsReady()) void runUpdateCheck().catch(() => undefined);
   });
 
-  app.on('window-all-closed', async () => {
-    // Save the queue as it is now: the running download comes back as "queued" next time and
-    // yt-dlp continues its .part file. Then stop writing, so killing yt-dlp below doesn't
-    // overwrite that state with "paused"/"canceled".
-    queueSaver.schedule({ version: 1, userPaused: queue.isUserPaused(), items: queue.snapshot() });
-    await queueSaver.flush();
-    quitting = true;
-    for (const item of queue.list()) if (item.status === 'downloading') queue.pause(item.id);
-    await bridge.stop();
-    await rm(cookieDir, { recursive: true, force: true });
-    app.quit();
+  // Only reached when the window really closed (tray disabled); with the tray it just hides.
+  app.on('window-all-closed', () => app.quit());
+
+  app.on('before-quit', (e) => {
+    if (cleanedUp) return;
+    e.preventDefault();
+    void (async () => {
+      // Save the queue as it is now: the running download comes back as "queued" next time and
+      // yt-dlp continues its .part file. Then stop writing, so killing yt-dlp below doesn't
+      // overwrite that state with "paused".
+      queueSaver.schedule({ version: 1, userPaused: queue.isUserPaused(), items: queue.snapshot() });
+      await queueSaver.flush().catch(() => undefined);
+      quitting = true;
+      for (const item of queue.list()) if (item.status === 'downloading') queue.pause(item.id);
+      await bridge.stop().catch(() => undefined);
+      await rm(cookieDir, { recursive: true, force: true }).catch(() => undefined);
+      tray?.destroy();
+      cleanedUp = true;
+      app.quit();
+    })();
   });
 }

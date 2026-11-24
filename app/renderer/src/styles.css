@@ -91,3 +91,5 @@ ul.tabs img, .favicon { width: 16px; height: 16px; flex-shrink: 0; }
 .badge.error, .badge.verify_failed { color: var(--err); }
 .badge.canceled, .badge.paused, .badge.skipped { color: var(--muted); }
 pre.log { max-height: 260px; overflow: auto; background: var(--bg); padding: 8px; border-radius: 6px; font-size: 11px; white-space: pre-wrap; }
+.section-input { font: inherit; padding: 4px 8px; width: 140px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
+.field input[type='text'], .field input[type='number'] { font: inherit; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }

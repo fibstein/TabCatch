@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { parseYtDlpLine, type ProgressInfo, type ResultInfo } from './ytdlp';
+import { parseYtDlpLine, type ProgressInfo, type ResultInfo, type Section } from './ytdlp';
 import type { VerifyResult } from './verify';
 
 export type ItemStatus =
@@ -44,6 +44,8 @@ export interface QueueItem {
   videoId?: string;
   /** Set for a stream captured from the page's network traffic: the page it was playing on. */
   pageUrl?: string;
+  /** Only this time range of the video. */
+  section?: Section;
   log: string[];
   addedAt: number;
 }
@@ -213,6 +215,24 @@ export class DownloadQueue extends EventEmitter {
     item.status = 'queued';
     this.changed();
     this.pump();
+  }
+
+  /**
+   * Sets or clears the time range of an item that hasn't started. A part is a different file
+   * from the full video, so an item skipped as "downloaded before" goes back into the queue.
+   */
+  setSection(id: string, section: Section | undefined): boolean {
+    const item = this.get(id);
+    if (!item || !['queued', 'paused', 'error', 'canceled', 'skipped'].includes(item.status)) return false;
+    item.section = section;
+    item.outputSuffix = undefined;
+    if (item.status === 'skipped') {
+      item.status = 'queued';
+      item.result = undefined;
+    }
+    this.changed();
+    this.pump();
+    return true;
   }
 
   /** "Yine de indir" for an item skipped because it was downloaded before. */

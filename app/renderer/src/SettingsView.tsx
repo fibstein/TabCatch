@@ -91,6 +91,80 @@ export function SettingsView({
       </section>
 
       <section className="card">
+        <h2>Dosyaya eklenecekler</h2>
+        <label className="check">
+          <input type="checkbox" checked={settings.embedMetadata} onChange={(e) => set({ embedMetadata: e.target.checked })} />
+          <span>Başlık, kanal, açıklama ve tarih (metadata)</span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={settings.embedThumbnail} onChange={(e) => set({ embedThumbnail: e.target.checked })} />
+          <span>Kapak resmi</span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={settings.embedChapters} onChange={(e) => set({ embedChapters: e.target.checked })} />
+          <span>Bölüm işaretleri (chapter), varsa</span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={settings.subtitles} onChange={(e) => set({ subtitles: e.target.checked })} />
+          <span>
+            Altyazılar
+            <div className="muted small">Videonun içine gömülür; oynatıcıdan açılıp kapatılabilir. Sadece ses indirmelerinde atlanır.</div>
+          </span>
+        </label>
+        <label className="field">
+          <span>Altyazı dilleri</span>
+          <input
+            type="text"
+            defaultValue={settings.subLangs}
+            disabled={!settings.subtitles && !settings.autoSubtitles}
+            onBlur={(e) => e.target.value !== settings.subLangs && set({ subLangs: e.target.value })}
+          />
+          <div className="muted small">Virgülle ayrılmış dil kodları. "en.*" İngilizcenin tüm varyantlarını kapsar (en-US, en-GB…).</div>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={settings.autoSubtitles} onChange={(e) => set({ autoSubtitles: e.target.checked })} />
+          <span>
+            Otomatik oluşturulmuş altyazılar
+            <div className="muted small">Konuşma tanımayla üretilenler; kalitesi değişken ve çok dil seçilirse YouTube istekleri sınırlayabilir.</div>
+          </span>
+        </label>
+        <label className="field">
+          <span>Hız limiti (MB/sn)</span>
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            defaultValue={settings.rateLimitMBps || ''}
+            placeholder="sınırsız"
+            onBlur={(e) => {
+              const v = Math.max(0, Number(e.target.value) || 0);
+              if (v !== settings.rateLimitMBps) set({ rateLimitMBps: v });
+            }}
+          />
+          <div className="muted small">Boş bırakırsan sınırsız. Yeni başlayan indirmelere uygulanır.</div>
+        </label>
+      </section>
+
+      <section className="card">
+        <h2>Uygulama</h2>
+        <label className="check">
+          <input type="checkbox" checked={settings.notifications} onChange={(e) => set({ notifications: e.target.checked })} />
+          <span>Kuyruk bitince bildirim göster</span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={settings.minimizeToTray} onChange={(e) => set({ minimizeToTray: e.target.checked })} />
+          <span>
+            Pencere kapatılınca sistem tepsisinde çalışmaya devam et
+            <div className="muted small">İndirmeler arka planda sürer; tamamen kapatmak için tepsi ikonunda "Çıkış".</div>
+          </span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={settings.startAtLogin} onChange={(e) => set({ startAtLogin: e.target.checked })} />
+          <span>Windows açılışında başlat (pencere açılmadan, tepside)</span>
+        </label>
+      </section>
+
+      <section className="card">
         <h2>Giriş gerektiren videolar</h2>
         <label className="check">
           <input type="checkbox" checked={settings.sendCookies} onChange={(e) => set({ sendCookies: e.target.checked })} />

@@ -18,6 +18,21 @@ export interface Settings {
   skipDownloaded: boolean;
   /** Close the browser tab once its video was downloaded and verified. */
   closeTabAfterDownload: boolean;
+  embedMetadata: boolean;
+  embedThumbnail: boolean;
+  embedChapters: boolean;
+  subtitles: boolean;
+  /** yt-dlp --sub-langs syntax. */
+  subLangs: string;
+  /** Automatically generated (speech recognition) subtitles. */
+  autoSubtitles: boolean;
+  /** MB/s; 0 = unlimited. */
+  rateLimitMBps: number;
+  /** Windows notification when the queue finishes. */
+  notifications: boolean;
+  /** Closing the window keeps TabCatch running in the system tray. */
+  minimizeToTray: boolean;
+  startAtLogin: boolean;
   lastUpdateCheck: number;
   /** Extra IDs for development builds loaded without the fixed manifest key. */
   extraExtensionIds: string[];
@@ -33,6 +48,16 @@ export function defaultSettings(downloadsDir: string): Settings {
     sendYouTubeCookies: false,
     skipDownloaded: true,
     closeTabAfterDownload: false,
+    embedMetadata: true,
+    embedThumbnail: true,
+    embedChapters: true,
+    subtitles: true,
+    subLangs: 'tr,en.*',
+    autoSubtitles: false,
+    rateLimitMBps: 0,
+    notifications: true,
+    minimizeToTray: true,
+    startAtLogin: false,
     lastUpdateCheck: 0,
     extraExtensionIds: [],
   };

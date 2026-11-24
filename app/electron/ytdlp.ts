@@ -18,11 +18,82 @@ export interface YtDlpArgsOptions {
    * them) and its title names the file, since a bare manifest URL has no useful title.
    */
   page?: { url: string; title: string };
+  embed?: EmbedOptions;
+  /** MB/s, undefined or 0 = unlimited. */
+  rateLimitMBps?: number;
+  /** Download only this part of the video (seconds). */
+  section?: Section;
 }
 
-export function outputTemplate(suffix?: number, fixedTitle?: string): string {
+export interface EmbedOptions {
+  metadata: boolean;
+  thumbnail: boolean;
+  chapters: boolean;
+  subtitles: boolean;
+  /** yt-dlp --sub-langs syntax, e.g. "tr,en.*". */
+  subLangs: string;
+  autoSubtitles: boolean;
+}
+
+export interface Section {
+  start: number;
+  end: number;
+}
+
+/** "1:02:03" / "10:00" / "75" -> seconds. */
+export function parseTime(t: string): number | null {
+  const parts = t.trim().split(':');
+  if (!parts.length || parts.length > 3 || parts.some((p) => !/^\d+(\.\d+)?$/.test(p))) return null;
+  return parts.reduce((acc, p) => acc * 60 + Number(p), 0);
+}
+
+/** "10:00-15:30" -> { start: 600, end: 930 }. */
+export function parseSection(text: string): Section | null {
+  const m = text.trim().match(/^([\d:.]+)\s*[-–]\s*([\d:.]+)$/);
+  if (!m) return null;
+  const start = parseTime(m[1]);
+  const end = parseTime(m[2]);
+  if (start === null || end === null || end <= start) return null;
+  return { start, end };
+}
+
+export function formatTime(s: number): string {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  const mm = String(m).padStart(h ? 2 : 1, '0');
+  return h ? `${h}:${mm}:${String(sec).padStart(2, '0')}` : `${mm}:${String(sec).padStart(2, '0')}`;
+}
+
+/** File-name tag, e.g. "[10m00s-15m30s]"; also part of the history key. */
+export function sectionTag(s: Section): string {
+  const f = (x: number) => `${Math.floor(x / 60)}m${String(Math.floor(x % 60)).padStart(2, '0')}s`;
+  return `[${f(s.start)}-${f(s.end)}]`;
+}
+
+function embedArgs(e: EmbedOptions | undefined, preset: FormatPreset): string[] {
+  if (!e) return [];
+  const args: string[] = [];
+  if (e.metadata) args.push('--embed-metadata');
+  if (!e.chapters) args.push('--no-embed-chapters');
+  else if (!e.metadata) args.push('--embed-chapters');
+  if (e.thumbnail) {
+    // WebP covers (YouTube's default) can't go into MP4/MP3; JPEG works in every container.
+    args.push('--embed-thumbnail', '--convert-thumbnails', 'jpg');
+  }
+  if (preset !== 'audio' && (e.subtitles || e.autoSubtitles)) {
+    if (e.subtitles) args.push('--write-subs');
+    if (e.autoSubtitles) args.push('--write-auto-subs');
+    // A few seconds between subtitle requests keeps YouTube from answering 429.
+    args.push('--sub-langs', e.subLangs.trim() || 'tr,en.*', '--embed-subs', '--sleep-subtitles', '2');
+  }
+  return args;
+}
+
+export function outputTemplate(suffix?: number, fixedTitle?: string, section?: Section): string {
   const name = fixedTitle ? safeTitle(fixedTitle) : '%(title).150B';
-  return suffix && suffix > 1 ? `${name} [%(id)s] (${suffix}).%(ext)s` : `${name} [%(id)s].%(ext)s`;
+  const tag = section ? ` ${sectionTag(section)}` : '';
+  return suffix && suffix > 1 ? `${name} [%(id)s]${tag} (${suffix}).%(ext)s` : `${name} [%(id)s]${tag}.%(ext)s`;
 }
 
 export function pageHeaders(pageUrl: string): string[] {
@@ -84,9 +155,16 @@ export function buildYtDlpArgs(o: YtDlpArgsOptions): string[] {
     '-P',
     o.outputDir,
     '-o',
-    outputTemplate(o.outputSuffix, o.page?.title),
+    outputTemplate(o.outputSuffix, o.page?.title, o.section),
     ...presetArgs(o.preset),
+    ...embedArgs(o.embed, o.preset),
   ];
+  if (o.rateLimitMBps && o.rateLimitMBps > 0) args.push('-r', `${o.rateLimitMBps}M`);
+  if (o.section) {
+    // Exact cut points need a re-encode around the cuts; without it the part starts at the
+    // previous keyframe and the duration check would (rightly) complain.
+    args.push('--download-sections', `*${formatTime(o.section.start)}-${formatTime(o.section.end)}`, '--force-keyframes-at-cuts');
+  }
   if (o.fresh) args.push('--no-continue', '--force-overwrites');
   if (o.cookiesFile) args.push('--cookies', o.cookiesFile);
   if (o.page) args.push(...pageHeaders(o.page.url));
